@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CS180 Project 0: Becoming Friends with Your Camera</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <a class="backlink" href="../index.html">&larr; Back to portfolio</a>
+
+  <header class="site">
+    <p class="kicker">Programming Project #0</p>
+    <h1>Becoming Friends with Your Camera</h1>
+    <p class="subtitle">CS180: Intro to Computer Vision and Computational Photography &middot; Alex Siek</p>
+  </header>
+
+  <main>
+
+    <section id="overview">
+      <h2>Overview</h2>
+      <p>
+        This project is about getting familiar with how a camera actually sees. Across the 3 parts,
+        I take pairs of photos where the subject stays roughly the same size in the frame, but I change
+        either the focal length or how far away I am standing. The point is that keeping the subject the
+        same size does not keep the photo the same, because what really shapes the image is where the
+        camera is sitting, not how much I zoom. Everything here was shot on my phone, so the range I
+        could work with was limited, but the effects still show up.
+      </p>
+    </section>
+
+    <section id="part1">
+      <h2>Part 1: Selfie: The Wrong Way vs. The Right Way</h2>
+      <p>
+        Unfortunately, I lack access to a camera with indepth lens control, and so I used my Samsung Flip 5.
+        There are 2 cameras, the main camera is a 5mm and the ultra-wide is a 3mm. According to
+        <a href="https://www.gsmarena.com/samsung_galaxy_z_flip5-review-2597p5.php"
+           target="_blank" rel="noopener">GSMArena</a>, they are equivalent to 24mm and 13mm
+        respectively.
+      </p>
+
+      <div class="figure-row two">
+        <figure>
+          <img src="./media/part1_24mm_25cm.png" alt="Portrait at roughly 24mm focal length, roughly 25cm from the subject" loading="lazy">
+          <figcaption>~24mm @ ~25cm</figcaption>
+        </figure>
+        <figure>
+          <img src="./media/part1_13mm_25cm.png" alt="Portrait at roughly 13mm focal length, roughly 25cm from the subject" loading="lazy">
+          <figcaption>~13mm @ ~25cm</figcaption>
+        </figure>
+      </div>
+
+      <h3>What changed, and why</h3>
+      <p>
+        I think the lack of focal length range limits the comparison, but I would say the shorter focal length (3mm/~13mm) distorts the image more 
+        by pulling my nose and eyes closer to the front, while slightly pushing my ears back. The main shorter focal length (5mm/~24mm) does a better job 
+        at keeping my face rounder and flatter, giving a better representation of a flat mirror.
+      </p>
+      <p>
+        At a shorter focal length, a wider angle of incoming light is captured and focused onto the sensor, resulting in a wider field of view.
+        To be the same size, I would have to move nearer to the camera (but because the range is so similar, I was basically the same size).
+        Because features like my nose are closer to the lens, it occupies more percentage of the FOV compared to farther features like my ears.
+        Thus, distorting by enlarging my nose slightly and shrinking by ears (relative).
+      </p>
+    </section>
+
+    <section id="part2">
+      <h2>Part 2: Architectural Perspective Compression</h2>
+      <p>
+        For my building, I took shots of Simon Hall from the sidewalks of International House. My first shot was far and zoomed in at ~2.5x, then moved nearer to the building and shot at 1x. 
+        Then I cropped the two images, aligning them by the top left corner of the building.
+      </p>
+
+      <div class="figure-row two">
+        <figure>
+          <img src="./media/architecture_far_zoomed.png"
+               alt="Building facade photographed from far away with the lens zoomed in" loading="lazy">
+          <figcaption>Far away, zoomed in (compressed).</figcaption>
+        </figure>
+        <figure>
+          <img src="./media/architecture_close_cropped.png"
+               alt="The same facade photographed from close up without zoom" loading="lazy">
+          <figcaption>Close up, no zoom (expanded).</figcaption>
+        </figure>
+      </div>
+
+      <h3>What changed, and why</h3>
+      <p>
+        As you mentioned, the zoomed in shot has the compressed width-wise, and moving closer to the building, the 1x picture lengthens the building again.
+        Because the focal length is fixed, when I'm closer to the building (at 1x zoom), the building it taking up a wider angle of the field of view, 
+        creating a stretched effect. 
+      </p>
+      <p>
+        When I move further, the building is taking up a narrow angle of the field of view, the difference of the building corners shrinks, creating a smaller footprint (compression).
+        Zooming in doesn't create this flattening effect, it just magnifies the flatten image of the building.
+      </p>
+    </section>
+
+    <section id="part3">
+      <h2>Part 3: The Dolly Zoom</h2>
+      <p>
+        (Please excuse my roommate's mess) For the dolly zoom, I chose a more controlled environment within my dorm room, taking 4 still shots of my water bottle.
+        I started at about 50cm away from the subject, then took 3 more shots at ~30cm intervals. I then aligned and sized them in-post, before using a free gif maker tool online to compile them.
+      </p>
+
+      <figure class="single wide">
+        <img src="./media/part3_dollyzoom.gif" alt="Animated dolly zoom sequence">
+        <figcaption>Dolly zoom: subject fixed, background rushing.</figcaption>
+      </figure>
+
+      <h3>Individual frames</h3>
+      <p class="meta">The GIF is static in the printed PDF, so the stills are shown here too.</p>
+      <div class="figure-row four">
+        <figure>
+          <img src="./media/dolly_1.png" alt="Dolly zoom still 1 of 4" loading="lazy">
+          <figcaption>Frame 1</figcaption>
+        </figure>
+        <figure>
+          <img src="./media/dolly_2.png" alt="Dolly zoom still 2 of 4" loading="lazy">
+          <figcaption>Frame 2</figcaption>
+        </figure>
+        <figure>
+          <img src="./media/dolly_3.png" alt="Dolly zoom still 3 of 4" loading="lazy">
+          <figcaption>Frame 3</figcaption>
+        </figure>
+        <figure>
+          <img src="./media/dolly_4.png" alt="Dolly zoom still 4 of 4" loading="lazy">
+          <figcaption>Frame 4</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="takeaways">
+      <h2>Takeaways</h2>
+      <p>
+        The main thing I took away is that zoom and distance are not the same thing, even though they
+        look similar in the viewfinder/preview. Zooming in only magnifies what is already there, it does not
+        change the perspective at all. What actually changes the shape of a face or a building is where
+        I choose to stand, because that changes how different the distances are from the lens to the
+        near parts and the far parts of the subject. Standing close makes that difference large and
+        exaggerates whatever is nearest, and standing back makes it small and flattens everything out.
+      </p>
+      <p>
+        The other takeaway is a practical one. My phone only gives me ~13mm and ~24mm, so the range was
+        narrow and the differences between my shots are subtler than I wanted. If I did this again I
+        would borrow a camera with proper lens control so the compression is more obvious.
+      </p>
+    </section>
+
+  </main>
+
+  <footer class="site">
+    <p>CS180 Project 0 &middot; alexsiek.github.io/0/</p>
+  </footer>
+
+</div>
+<div class="ai-disclaimer">
+  <div class="ai-disclaimer__panel" id="ai-usage-note" role="note">
+    <p>
+      For transparency, this website is Claude Coded. I do have a background in software
+      engineering, and I am able to develop and design this website. But to save time, I've
+      used Claude to beautify this website. All results and code (relating to CV) will be
+      handcoded by me, just presentation on the website is Claude Coded.
+    </p>
+  </div>
+  <button class="ai-disclaimer__toggle" type="button"
+          aria-expanded="false" aria-controls="ai-usage-note">AI usage</button>
+</div>
+
+<script>
+  (function () {
+    var widget = document.querySelector('.ai-disclaimer');
+    var toggle = widget.querySelector('.ai-disclaimer__toggle');
+
+    function setOpen(open) {
+      widget.classList.toggle('is-open', open);
+      toggle.setAttribute('aria-expanded', String(open));
+    }
+
+    toggle.addEventListener('click', function () {
+      setOpen(!widget.classList.contains('is-open'));
+    });
+
+    widget.addEventListener('mouseenter', function () { toggle.setAttribute('aria-expanded', 'true'); });
+    widget.addEventListener('mouseleave', function () {
+      if (!widget.classList.contains('is-open')) toggle.setAttribute('aria-expanded', 'false');
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!widget.contains(e.target)) setOpen(false);
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') setOpen(false);
+    });
+  })();
+</script>
+
+</body>
+</html>
