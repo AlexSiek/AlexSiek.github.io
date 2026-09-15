@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CS180 Project 1: Colorizing the Prokudin-Gorskii Collection</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="./proj1.css">
+
+  <script>
+    /* Bootstrap components follow the same light/dark preference as the rest of the site. */
+    document.documentElement.setAttribute(
+      "data-bs-theme",
+      window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  </script>
+</head>
+<body>
+<div class="wrap wrap--wide">
+
+  <a class="backlink" href="../index.html">&larr; Back to portfolio</a>
+
+  <header class="site">
+    <p class="kicker">Programming Project #1</p>
+    <h1>Colorizing the Prokudin-Gorskii Collection</h1>
+    <p class="subtitle">CS180: Intro to Computer Vision and Computational Photography &middot; Alex Siek</p>
+  </header>
+
+  <nav class="proj-nav">
+    <ul class="nav nav-pills justify-content-center">
+      <li class="nav-item"><a class="nav-link" href="#overview">Overview</a></li>
+      <li class="nav-item"><a class="nav-link" href="#approach">Approach</a></li>
+      <li class="nav-item"><a class="nav-link" href="#single">Single scale</a></li>
+      <li class="nav-item"><a class="nav-link" href="#pyramid">Pyramid</a></li>
+      <li class="nav-item"><a class="nav-link" href="#problems">Where it failed</a></li>
+      <li class="nav-item"><a class="nav-link" href="#chaining">Chaining</a></li>
+      <li class="nav-item"><a class="nav-link" href="#bells">Edges</a></li>
+      <li class="nav-item"><a class="nav-link" href="#takeaways">Takeaways</a></li>
+    </ul>
+  </nav>
+
+  <main>
+
+    <section id="overview">
+      <h2>Overview</h2>
+      <p>
+        For this assignment, we are talking Prokudin-Gorskii shots, where each scene is taken 3 times through a blue, 
+        green and red filter. The task is to automate the stacking of these 3 exposures top to bottom. Below are the 
+        14 provided images, including one that struggles to align at first, and what I did to resolve it. The gist of it: 
+        We use a color layer as the reference, then we "overlay" the other color layer ontop and sweep through the entire
+        image using a scoring function. From there we take the highest scoring function as the offset needed for the 
+        top color layer.
+      </p>
+    </section>
+
+    <section id="approach">
+      <h2>Approach</h2>
+      <h3>Comparing interior scores</h3>
+      <p>
+        Before going indepth about the searching algorithms, I would like to explain on the scoring functions and how 
+        we try to mitigate issues. In the images, there are black borders that separate the colored layers from 
+        the background as well as other color layers. If we were to use the scoring function on the image layers as is, the 
+        black borders will throw off the scores (as black contains all three colors, any pixel with high color intensity
+        would find it's score better with these black borders pixels).
+      </p>
+      <p>
+        To deal with this, before passing each color layer matrix into the scoring function, we "punch-in" the image by 80%, 
+        leaving the 10% out from the top, left, bottom, right of the matrix/image. This doubles it's use as when we apply
+        <code>np.roll</code>, the top sections are rolled over to the bottom, the left sections are rolled over to the right, etc. 
+        By cropping in the matrix, we don't have to account for these roll-over sections in our scoring.  
+      </p>
+
+      <h3>Single scale search</h3>
+
+      <div class="anim anim--bare" id="anim-single">
+        <div class="anim__stage">
+          <div class="plate plate--ref"></div>
+          <div class="plate plate--g" data-plate-g></div>
+          <div class="plate plate--r" data-plate-r></div>
+        </div>
+        <canvas class="anim__heat" data-heat></canvas>
+      </div>
+      <p>
+        For the low resolution images, we can afford to just try every offset there is. The blue layer
+        stays put as the reference, and we shift the moving layer from -15px to +15px in both directions,
+        which gives us 31 x 31, or 961 offsets to go through. At each one we run the scoring function on
+        the punched-in matrices from above, and keep track of whichever offset came out highest. At the
+        end, we apply that offset to the moving layer.
+      </p>
+      <p>
+        I implemented both the Normalized Cross Correlation (NCC) and Sum of Squared Differences (SSD)
+        scoring functions, and kept NCC as the default as it didn't matter much here with 2 of the 3 pictures agreeing 
+        on the same offest. 
+        Where they do disagree later on ("emir"), it turns out the scoring function matters a lot less than 
+        what we are feeding into it.
+      </p>
+<pre class="snippet"><code>for dy in range(-radius, radius + 1):
+    for dx in range(-radius, radius + 1):
+        shifted = np.roll(moving, (dy, dx), axis=(0, 1))
+        current = score(interior(shifted), interior(reference))
+        if current &gt; best_score:
+            best_score, best_shift = current, (dy, dx)</code></pre>
+
+      <h3>Pyramid search</h3>
+
+      <div class="anim anim--bare" id="anim-pyramid">
+        <div class="anim__stage anim__stage--plates">
+          <canvas class="plate-canvas plate-canvas--ref" data-plate-ref></canvas>
+          <canvas class="plate-canvas plate-canvas--moving" data-plate-mov></canvas>
+        </div>
+        <canvas class="anim__heat" data-heat></canvas>
+      </div>
+      <p>
+        The .tif scans are a lot bigger, around 3200 x 3700 per color layer, and the true offsets are much larger. 
+        Trying every offset at that size is just infeasible.
+      </p>
+      <p>
+        What we do instead is build an image pyramid. We shrink the image by half over and over, so a
+        huge offset turns into a smaller offset that the small search can actually reach. The catch is
+        that we cannot just drop every other row and column, as that causes aliasing (the fine details
+        get mistaken for coarse ones) and the small images stop looking like each other. So we blur with
+        a Gaussian first, then subsample. I wrote the Gaussian kernel and the convolution myself off a
+        1-D kernel instead of calling a library resize, since the handout asks for the pyramid to be
+        from scratch. We keep halving until the short side drops under 400px, which works out to 5
+        levels on these scans.
+      </p>
+      <p>
+        At the smallest level we run the same -15px to +15px search as before. Coming back up, the
+        estimate doubles because the image doubles, so we only need to correct it by a pixel or two.
+        This is where the recursion does the work for us: the coarse call is just the same function on
+        a smaller image, so we never have to build or store the pyramid ourselves.
+      </p>
+<pre class="snippet"><code>def align_pyramid(moving, reference, radius, metric, min_size):
+    if min(moving.shape) &lt;= min_size:
+        return search_displacements(moving, reference, radius, metric)
+
+    coarse = align_pyramid(downsample(moving), downsample(reference),
+                           radius, metric, min_size)
+    centre = (2 * coarse[0], 2 * coarse[1])
+    return search_displacements(moving, reference, REFINE_RADIUS, metric, centre=centre)</code></pre>
+      <p>
+        That turns one search over hundreds of pixels into a handful of tiny ones, and a full size
+        image lines up in roughly 12 to 15 seconds.
+      </p>
+
+      <div class="row g-3 my-4">
+        <div class="col-md-6">
+          <table class="table table-sm">
+            <tbody>
+              <tr><th scope="row">Metric</th><td data-config="metric">TODO</td></tr>
+              <tr><th scope="row">Search window</th><td data-config="searchWindow">TODO</td></tr>
+              <tr><th scope="row">Border ignored</th><td data-config="borderCrop">TODO</td></tr>
+              <tr><th scope="row">Pyramid levels</th><td data-config="pyramidLevels">TODO</td></tr>
+              <tr><th scope="row">Coarse window</th><td data-config="coarseWindow">TODO</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col-md-6">
+          <p class="note">
+            These values are filled in from <code>results.js</code>, so the write up and the
+            numbers cannot drift apart.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <div class="tools">
+      <label>
+        <input class="form-check-input mt-0" type="checkbox" id="magnify-toggle" checked>
+        Magnifier
+      </label>
+      <label>
+        zoom
+        <input type="range" class="form-range" id="magnify-zoom"
+               min="2" max="12" step="0.5" value="4" style="width: 120px;">
+        <span id="magnify-zoom-label">4.0x</span>
+      </label>
+      <span>Hover any result with the magnifier on, or click it to open the lightbox.</span>
+    </div>
+
+    <section id="single">
+      <h2>Single scale alignment</h2>
+      <p>
+        All three JPEGs align correctly, taking about 4 seconds each.
+      </p>
+      <div id="gallery-single"></div>
+      <div id="table-single" class="mt-4"></div>
+    </section>
+
+    <section id="pyramid">
+      <h2>Pyramid alignment on the provided set</h2>
+      <p>
+        Thirteen of the fourteen align cleanly. On the three JPEGs, where both methods run, the
+        pyramid returns exactly the same offsets as the exhaustive search, so the coarse to fine
+        version is not trading accuracy for speed here. The one failure is emir, and it gets its
+        own section below.
+      </p>
+      <div id="gallery-pyramid"></div>
+      <div id="table-pyramid" class="mt-4"></div>
+    </section>
+
+    <section id="problems">
+      <h2>Where it failed, and why</h2>
+      <p>
+        Thirteen of the fourteen align cleanly. One does not, and it fails for a particular reason.
+      </p>
+      <div id="failures"></div>
+
+      <h3 class="mt-5">Does the other metric do any better?</h3>
+      <p>
+        The handout offers L2 / SSD as an alternative to NCC, so it is worth asking whether the
+        choice of metric. I ran all four combinations of metric and feature on it. The red displacement 
+        should be (40, 107).
+      </p>
+      <div class="table-responsive">
+        <table class="table table-sm w-auto">
+          <thead>
+            <tr><th></th><th scope="col">NCC</th><th scope="col">SSD</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">raw intensity</th>
+              <td>(-205, 141)</td>
+              <td>(57, 103)</td>
+            </tr>
+            <tr>
+              <th scope="row">gradient magnitude</th>
+              <td>(40, 107)</td>
+              <td>(40, 107)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        SSD does do better here. It misses by around 17px instead of 200px, which is enough to get
+        rid of the doubled image. But its still not great, at that offset
+        there is still obvious red and cyan fringing along the braid and facial features, as the pair below
+        shows, so it is not a result I would want to hand in either.
+      </p>
+      <p>
+        The bottom row is the more telling one. Once the feature is fixed, both scoring functions
+        land on exactly the same offset. The metric only really matters while we are comparing the
+        wrong thing.
+      </p>
+      <div class="row g-3">
+        <div class="col-md-6">
+          <a class="shot glightbox" href="./media/emir_intensity_ncc.jpg"
+             data-gallery="metrics" data-title="emir, intensity with NCC">
+            <img src="./media/emir_intensity_ncc.jpg" alt="emir aligned on intensity with NCC" loading="lazy">
+          </a>
+          <p class="shot-note">intensity + NCC, (-205, 141)</p>
+        </div>
+        <div class="col-md-6">
+          <a class="shot glightbox" href="./media/emir_intensity_ssd.jpg"
+             data-gallery="metrics" data-title="emir, intensity with SSD">
+            <img src="./media/emir_intensity_ssd.jpg" alt="emir aligned on intensity with SSD" loading="lazy">
+          </a>
+          <p class="shot-note">intensity + SSD, (57, 103)</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="chaining">
+      <h2>Chaining: align red to green, not to blue</h2>
+      <p>
+        Before reaching for anything new, it is worth asking what is actually wrong. If I take
+        emir's plates and line them up correctly by hand, then measure how much each pair of
+        plates resembles the others:
+      </p>
+      <table class="table table-sm w-auto my-3">
+        <tbody>
+          <tr><th scope="row">blue against green</th><td>0.7074</td></tr>
+          <tr><th scope="row">green against red</th><td>0.7609</td></tr>
+          <tr><th scope="row">blue against red</th><td>0.2644</td><td class="meta">the comparison the matcher was being asked to make</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Blue and red sit at the two opposite ends of the spectrum, and the coat is strongly blue
+        silk. That means it shows up bright in the blue layer, somewhere in the middle in green,
+        and dark in red. So when we ask the scoring function to match blue against red, we are
+        really asking it to match the brightest version of the coat against the darkest version of
+        it, which is the hardest of the three comparisons we could be making. It is also the only
+        one the original code ever makes.
+      </p>
+      <p>
+        So we just do not make it. We align green onto blue like before, then align red onto green
+        instead of onto blue, and add the two offsets together (they add up because each one is
+        only a shift, so going red to green to blue ends up in the same place as going red
+        straight to blue). For emir that is (24, 49) for the green hop and (17, 57) for the red
+        hop, which adds up to (41, 106) against a truth of (40, 107). Neither of those hops is a
+        hard comparison, and the hard one never happens at all.
+      </p>
+      <p class="step-label">before</p>
+<pre class="snippet"><code>green_shift = align(match_green, match_blue, radius, metric)
+red_shift   = align(match_red,   match_blue, radius, metric)</code></pre>
+      <p class="step-label">after</p>
+<pre class="snippet"><code>green_shift  = align(match_green, match_blue,  radius, metric)
+red_to_green = align(match_red,   match_green, radius, metric)
+red_shift    = (green_shift[0] + red_to_green[0],
+                green_shift[1] + red_to_green[1])</code></pre>
+      <p>
+        Below are all 17 plates under chaining: the fourteen provided, plus three I picked from the
+        Library of Congress collection, downloaded as the original three panel glass plate scans
+        rather than the colour composites the site also offers. Each of mine links back to its
+        catalogue page.
+      </p>
+      <div id="gallery-chained"></div>
+      <div id="table-chained" class="mt-4"></div>
+    </section>
+
+    <section id="bells">
+      <h2>Bells and whistles: edge based matching</h2>
+
+      <div id="bells-body"></div>
+
+<pre class="snippet"><code>def derivative_kernel(sigma):
+    return np.convolve(gaussian_kernel(sigma), np.array([1.0, 0.0, -1.0]), mode="same")
+
+
+def gradient_magnitude(image, sigma):
+    smooth = gaussian_kernel(sigma)
+    derivative = derivative_kernel(sigma)
+    dx = convolve_1d(convolve_1d(image, smooth, 0), derivative, 1)
+    dy = convolve_1d(convolve_1d(image, derivative, 0), smooth, 1)
+    return np.sqrt(dx ** 2 + dy ** 2)</code></pre>
+    </section>
+
+    <section id="takeaways">
+      <h2>Takeaways</h2>
+      <p>
+        The thing I did not expect was how sharply <em>what you compare</em> beats every other knob.
+        I spent a while assuming emir was a search problem and tried the obvious fixes: a wider
+        refinement window at plus or minus 4 and 8, cropping 20% and 30% of the border instead of
+        10%, swapping NCC for SSD, and stopping the pyramid a level early with a wider coarse
+        search. None of them fixed it, because intensity NCC scores the wrong alignment higher than
+        the correct one at every level of the pyramid, including the full resolution image. You
+        cannot search your way to a maximum that is not there.
+      </p>
+      <p>
+        Both things that did work changed what was being compared rather than how hard the search
+        looked. Chaining sidesteps the hard comparison by never making it, and costs a pixel or two
+        of drift. Gradient matching makes the comparison easy, and costs nothing but one extra
+        filter pass. It is a little annoying that the second one is the tidier answer, because the
+        first needs no new image processing at all.
+      </p>
+    </section>
+
+  </main>
+
+  <footer class="site">
+    <p>CS180 Project 1 &middot; alexsiek.github.io/1/</p>
+  </footer>
+
+</div>
+
+<div class="ai-disclaimer">
+  <div class="ai-disclaimer__panel" id="ai-usage-note" role="note">
+    <p>
+      For transparency, this website is Claude Coded. I do have a background in software
+      engineering, and I am able to develop and design this website. But to save time, I've
+      used Claude to beautify this website. All results and code (relating to CV) will be
+      handcoded by me, just presentation on the website is Claude Coded.
+    </p>
+  </div>
+  <button class="ai-disclaimer__toggle" type="button"
+          aria-expanded="false" aria-controls="ai-usage-note">AI usage</button>
+</div>
+
+<script>
+  (function () {
+    var widget = document.querySelector('.ai-disclaimer');
+    var toggle = widget.querySelector('.ai-disclaimer__toggle');
+
+    function setOpen(open) {
+      widget.classList.toggle('is-open', open);
+      toggle.setAttribute('aria-expanded', String(open));
+    }
+
+    toggle.addEventListener('click', function () {
+      setOpen(!widget.classList.contains('is-open'));
+    });
+
+    widget.addEventListener('mouseenter', function () { toggle.setAttribute('aria-expanded', 'true'); });
+    widget.addEventListener('mouseleave', function () {
+      if (!widget.classList.contains('is-open')) toggle.setAttribute('aria-expanded', 'false');
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!widget.contains(e.target)) setOpen(false);
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') setOpen(false);
+    });
+  })();
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script src="./results.js"></script>
+<script src="./proj1.js"></script>
+<script src="./anim.js"></script>
+
+</body>
+</html>

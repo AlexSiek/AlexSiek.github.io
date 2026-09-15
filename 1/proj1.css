@@ -1,0 +1,477 @@
+/* Project 1 page styles. Loaded after bootstrap and after the site stylesheet,
+   so it wins on anything the two of them disagree about. */
+
+/* The gallery needs more room than the 900px reading column used elsewhere. */
+.wrap--wide { max-width: 1200px; }
+
+/* ---------- bootstrap reconciliation ---------- */
+
+/* Bootstrap's reboot sets its own type and colours. Pull the components that
+   actually get used back onto the site palette. */
+.card,
+.table,
+.nav-link,
+.badge,
+.btn { font-family: inherit; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.card-body { padding: 12px 14px; }
+
+.table {
+  --bs-table-bg: transparent;
+  --bs-table-color: var(--text);
+  --bs-table-border-color: var(--line);
+  font-size: 0.9rem;
+}
+
+.table thead th {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* ---------- sticky section nav ---------- */
+
+.proj-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  margin: 0 0 40px;
+  padding: 8px 0;
+}
+
+.proj-nav .nav-link {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-radius: 999px;
+}
+
+.proj-nav .nav-link:hover { color: var(--text); }
+
+.proj-nav .nav-link.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+section { scroll-margin-top: 72px; }
+
+/* ---------- result cards ---------- */
+
+.shot { position: relative; display: block; line-height: 0; cursor: zoom-in; }
+
+.shot img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 0;
+  border-radius: 0;
+}
+
+/* tile shown for a result that has not been produced yet */
+.shot--pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 4 / 5;
+  background: var(--bg);
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  text-align: center;
+  padding: 12px;
+  cursor: default;
+}
+
+.shot-name {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--text);
+  margin: 0 0 6px;
+  word-break: break-word;
+}
+
+.offsets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+}
+
+.offset-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.offset-chip b { font-weight: 600; color: var(--text); }
+.offset-chip.g b { color: #2f9e44; }
+.offset-chip.r b { color: #e03131; }
+
+.shot-note { margin: 8px 0 0; font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
+
+/* ---------- magnifier lens ---------- */
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin: 0 0 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.tools label { display: flex; align-items: center; gap: 8px; margin: 0; }
+
+.magnifier {
+  position: fixed;
+  z-index: 60;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+  background-repeat: no-repeat;
+  pointer-events: none;
+  display: none;
+  image-rendering: pixelated;
+}
+
+body.magnify-on .shot { cursor: crosshair; }
+
+/* ---------- before / after slider ---------- */
+
+.compare {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  user-select: none;
+  touch-action: pan-y;
+  line-height: 0;
+}
+
+.compare img { width: 100%; display: block; }
+
+.compare__after {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  overflow: hidden;
+  clip-path: inset(0 0 0 50%);
+}
+
+.compare__after img { position: absolute; inset: 0; height: 100%; object-fit: cover; }
+
+.compare__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  cursor: ew-resize;
+}
+
+.compare__handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.compare__tag {
+  position: absolute;
+  top: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  line-height: 1.6;
+}
+
+.compare__tag--before { left: 10px; }
+.compare__tag--after { right: 10px; }
+
+/* ---------- print ---------- */
+
+@media print {
+  .proj-nav, .tools { display: none; }
+  .magnifier { display: none !important; }
+  .compare__after { clip-path: none; position: static; }
+  .compare__handle { display: none; }
+}
+
+/* ---------- approach animations ---------- */
+
+.anim {
+  margin: 24px 0 28px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.anim__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.anim__stage {
+  position: relative;
+  flex: 0 0 300px;
+  width: 300px;
+  height: 300px;
+  border-radius: var(--radius);
+  background: #1b1a18;
+  overflow: hidden;
+}
+
+/* the two plates, drawn as plain bordered squares */
+.plate {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 150px;
+  height: 150px;
+  margin: -75px 0 0 -75px;
+  border: 2px solid;
+  border-radius: 3px;
+}
+
+.plate--ref { border-color: #4d9bf5; }
+.plate--moving { border-color: #51cf66; transition: transform 0.05s linear; }
+
+/* the inner 80% that scoring actually looks at */
+.plate--ref::after {
+  content: "";
+  position: absolute;
+  inset: 10%;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+}
+
+.anim__side { flex: 1 1 260px; min-width: 240px; }
+
+.anim__heat {
+  width: 160px;
+  height: 160px;
+  image-rendering: pixelated;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #232120;
+}
+
+.anim__readout {
+  margin: 12px 0 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.9;
+  color: var(--muted);
+}
+
+.anim__readout b { color: var(--text); font-weight: 600; }
+
+.anim__controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.anim__controls button {
+  padding: 4px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.anim__controls button:hover { border-color: var(--accent); }
+.anim__controls input[type="range"] { width: 90px; }
+
+.anim__caption {
+  margin: 14px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+/* legend dots */
+.key { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; }
+.key i { width: 10px; height: 10px; border: 2px solid; border-radius: 2px; }
+.key i.ref { border-color: #4d9bf5; }
+.key i.moving { border-color: #51cf66; }
+
+/* ---------- pyramid level tiles ---------- */
+
+.levels {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.level {
+  border: 2px solid var(--line);
+  border-radius: 3px;
+  background: #1b1a18;
+  opacity: 0.4;
+  transition: opacity 0.25s ease, border-color 0.25s ease, transform 0.25s ease;
+}
+
+.level.is-done { opacity: 0.75; border-color: #4d9bf5; }
+
+.level.is-active {
+  opacity: 1;
+  border-color: var(--accent);
+  transform: translateY(-3px);
+}
+
+.level__label {
+  display: block;
+  margin-top: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.62rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media print {
+  .anim__controls { display: none; }
+}
+
+/* two moving plates for the single scale animation */
+.plate--g { border-color: #51cf66; transition: transform 0.06s linear; }
+.plate--r {
+  border-color: #ff6b6b;
+  opacity: 0;
+  transition: transform 0.06s linear, opacity 0.55s ease;
+}
+
+.key i.red { border-color: #ff6b6b; }
+
+.ch--green { color: #51cf66 !important; }
+.ch--red { color: #ff6b6b !important; }
+
+/* ---------- bare animation: no panel, no text, no backdrop ---------- */
+
+.anim--bare {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  flex-wrap: wrap;
+  margin: 28px 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.anim--bare .anim__stage {
+  background: none;
+  flex: 0 0 300px;
+}
+
+.anim--bare .anim__heat {
+  border: 0;
+  background: none;
+  width: 150px;
+  height: 150px;
+}
+
+/* ---------- pyramid plates ---------- */
+
+.anim__stage--plates {
+  flex: 0 0 200px;
+  width: 200px;
+  height: 200px;
+  background: none;
+  overflow: visible;
+}
+
+.plate-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 200px;
+  height: 200px;
+  image-rendering: pixelated;
+}
+
+/* the moving plate sits over the reference so overlap is readable */
+.plate-canvas--moving {
+  mix-blend-mode: screen;
+  transition: transform 0.25s ease;
+}
+
+:root:not([data-theme="dark"]) .plate-canvas--moving { mix-blend-mode: multiply; }
+
+@media (prefers-color-scheme: dark) {
+  .plate-canvas--moving { mix-blend-mode: screen; }
+}
+
+/* the pyramid animation needs room to breathe on either side */
+#anim-pyramid { margin: 64px 0 72px; }
+
+/* ---- small code snippets in the walkthrough ---- */
+pre.snippet {
+  background: rgba(127, 127, 127, 0.10);
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  overflow-x: auto;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  margin: 0.6rem 0 1.2rem;
+}
+pre.snippet code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  white-space: pre;
+}
+.step-label {
+  display: inline-block;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
