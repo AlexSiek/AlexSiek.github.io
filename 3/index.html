@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CS180 Project 3: Fun with Flow Models</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="./proj3.css">
+
+  <script>
+    /* Bootstrap components follow the same light/dark preference as the rest of the site. */
+    document.documentElement.setAttribute(
+      "data-bs-theme",
+      window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  </script>
+</head>
+<body>
+<div class="wrap wrap--wide">
+
+  <a class="backlink" href="../index.html">&larr; Back to portfolio</a>
+
+  <header class="site">
+    <p class="kicker">Programming Project #3</p>
+    <h1>Fun with Flow Models</h1>
+    <p class="subtitle">CS180: Intro to Computer Vision and Computational Photography &middot; Alex Siek</p>
+  </header>
+
+  <nav class="proj-nav">
+    <ul class="nav nav-pills justify-content-center">
+      <li class="nav-item"><a class="nav-link" href="#overview">Overview</a></li>
+      <li class="nav-item"><a class="nav-link" href="#a-sampling">A1 Sampling</a></li>
+      <li class="nav-item"><a class="nav-link" href="#a-guidance">A2 Guidance</a></li>
+      <li class="nav-item"><a class="nav-link" href="#a-editing">A3 Editing</a></li>
+      <li class="nav-item"><a class="nav-link" href="#a-illusions">A3 Illusions</a></li>
+      <li class="nav-item"><a class="nav-link" href="#b-unet">B1 Denoiser</a></li>
+      <li class="nav-item"><a class="nav-link" href="#b-time">B2 Flow matching</a></li>
+      <li class="nav-item"><a class="nav-link" href="#b-class">B2 Class conditioning</a></li>
+      <li class="nav-item"><a class="nav-link" href="#learned">What I learned</a></li>
+    </ul>
+  </nav>
+
+  <main>
+
+    <section id="overview">
+      <h2>Overview</h2>
+      <p>
+        This project is about one idea: instead of learning what an image looks like, learn which
+        direction to move. A flow model is handed a point somewhere between pure noise and a real
+        photograph, and it predicts the velocity that would carry that point the rest of the way.
+        Generating an image is then just following that velocity, in small steps, from noise to
+        picture.
+      </p>
+      <p>
+        The convention throughout is a straight line between the two ends. Write
+        <code>x_t = (1 - t) * eps + t * x_1</code>, where <code>eps</code> is Gaussian noise and
+        <code>x_1</code> is the clean image. Time 0 is noise, time 1 is the image, and the velocity
+        along that path is just <code>x_1 - eps</code>, which does not depend on <code>t</code> at
+        all. The model's job is to look at a noisy image and guess that difference.
+      </p>
+      <p>
+        Part A uses a pretrained model and spends its time finding out what you can do with a good
+        velocity predictor, which turns out to be a lot more than denoising. Part B throws the
+        pretrained model away and builds one from scratch on MNIST, starting from a plain denoiser
+        and ending with a class-conditioned flow model.
+      </p>
+      <p>
+        Both halves run from the course notebooks. Part A is inference only and Part B trains five
+        models, counting the ablation, so the figures below come out of two separate GPU sessions.
+      </p>
+      <div id="run-table"></div>
+      <p>
+        The image I used throughout section 1 is a photograph of my Freddy Fazbear plush on a white
+        background. It turned out to be a lucky pick, because it is soft, has a lot of fine fabric
+        texture, and sits on a plain background, so the error maps in 1.4 have somewhere obvious to
+        concentrate and the edits in section 3 have something recognisable to destroy.
+      </p>
+    </section>
+
+    <div class="tools">
+      <label>
+        <input class="form-check-input mt-0" type="checkbox" id="magnify-toggle" checked>
+        Magnifier
+      </label>
+      <label>
+        zoom
+        <input type="range" class="form-range" id="magnify-zoom"
+               min="2" max="12" step="0.5" value="4" style="width: 120px;">
+        <span id="magnify-zoom-label">4.0x</span>
+      </label>
+      <span>Hover any result with the magnifier on, or click it to open the lightbox.</span>
+    </div>
+
+    <!-- ============================================================ PART A -->
+
+    <section id="a-sampling">
+      <h2>Part A &middot; Visualizing Training and Sampling</h2>
+      <p>
+        Everything in this first section uses one photograph of my own and one noise tensor, reused
+        at <code>t = 0.25</code>, <code>0.50</code> and <code>0.75</code>. Keeping the noise fixed
+        matters, because then the only thing changing between the three is how much of the original
+        is still in there, and anything that differs is down to the time, not to a different random
+        draw.
+      </p>
+
+      <h3>1.1 Constructing noisy training inputs</h3>
+      <p>
+        The interpolation is one line, and the thing worth checking is the two endpoints. At
+        <code>t = 0</code> it has to hand back the noise untouched, and at <code>t = 1</code> the
+        image untouched. Both come back exact, which is a cheap way to catch an inverted time
+        convention before it poisons everything downstream.
+      </p>
+<pre class="snippet"><code>def interpolate(image, noise, t):
+    return (1 - t) * noise + t * image</code></pre>
+      <div id="fig-a11"></div>
+
+      <h3>1.2 Classical denoising</h3>
+      <p>
+        The baseline is the obvious thing to try before reaching for a model. The noisy image has
+        been scaled down by a factor of <code>t</code> along with everything else, so first divide
+        by <code>t</code> to put the amplitude back, then blur to knock the noise down. The provided
+        cell sweeps sigma over 1, 2, 4, 8 and 16 and keeps whichever gives the lowest mean squared
+        error against the clean image.
+      </p>
+      <p>
+        Picking sigma by comparing against the clean image is not something you could do for real,
+        because if you had the clean image you would not be denoising. The baseline is being handed
+        an advantage the model never gets, and it still loses.
+      </p>
+      <div id="fig-a12"></div>
+      <p>
+        The result is bad in both directions at once. The blur never removes the noise, it
+        just smears it into coloured blotches, and the fur and the stitching go with it. At
+        <code>t = 0.25</code> the sweep picks the widest kernel it has and the bear is a brown smudge
+        with the hat still readable because it is the only thing with enough contrast to survive.
+        Only at <code>t = 0.75</code>, where there was not much noise to begin with, does it produce
+        something you would call a denoised picture.
+      </p>
+      <p>
+        That is the honest ceiling for a method that knows nothing about images. A Gaussian cannot
+        tell the difference between a speckle of noise and a stitch in the fabric, so it has to treat
+        them the same way.
+      </p>
+
+      <h3>1.3 One-step denoising</h3>
+      <p>
+        Now use the model. It reports the velocity at the point you are standing on, and there is
+        <code>(1 - t)</code> of the path left to travel, so the single-step estimate of the clean
+        image is just the current point plus the rest of the journey in one move.
+      </p>
+<pre class="snippet"><code>def one_step_denoise(x, t, condition, predict_velocity):
+    return x + (1 - t) * predict_velocity(x, t, condition)</code></pre>
+      <p>
+        This would be exact if the true path were a straight line all the way to the image. It is
+        not, and the further out you start the more that matters, which is the whole reason section
+        1.5 exists.
+      </p>
+      <div id="fig-a13"></div>
+      <p>
+        The jump from the previous section is large. One prediction gets you a clean, sharp bear at
+        every one of the three times, with no blotches anywhere. What it does not get you is the
+        original. The plush texture is replaced by a smooth surface, so the result reads as a 3D
+        render of the bear rather than a photograph of it, and the smaller the <code>t</code> the
+        more the model is inventing and the less it is recovering.
+      </p>
+      <p>
+        That makes sense given what the model was asked. It is answering the question "what clean
+        image is this a noisy version of", and a smooth plausible bear is a better answer under its
+        own prior than the exact fabric that happened to be there.
+      </p>
+
+      <h3>1.4 Visualizing velocity</h3>
+      <p>
+        Section 1.3 added <code>(1 - t) * v</code> to the noisy image. This section looks at that
+        quantity directly and puts it next to the update that would exactly recover the original.
+        Since the noise was saved, the ground truth velocity is known exactly: it is
+        <code>x_1 - eps</code>, so the true update is <code>(1 - t) * (x_1 - eps)</code>, which works
+        out to <code>x_1 - x_t</code>.
+      </p>
+      <p>
+        The error map is the per-pixel RMS across RGB, so the channel differences get squared,
+        averaged over colour only, and square rooted, leaving one value per pixel. Both updates are
+        drawn on one shared symmetric scale with zero at middle grey, and all three times use the
+        same limits, so the panels can be compared against each other instead of each being
+        stretched to its own range.
+      </p>
+      <div id="fig-a14-original"></div>
+      <div id="fig-a14"></div>
+      <p>
+        The two update panels look almost the same, which is the point: the model has learned the
+        right answer to within something small. The error map is where the interesting part is, and
+        it is almost entirely dark. What is not dark is a clean outline drawing of the bear. The
+        silhouette, the brim of the hat, the rims of the eyes, the edge of the muzzle and the
+        boundaries between the limbs all light up, and the flat background and the flat areas of fur
+        sit at essentially zero.
+      </p>
+      <p>
+        So the error is concentrated at the edges. The model is right almost everywhere and uncertain
+        exactly where the image changes quickly, which is the same place project 2's gradient
+        magnitude lit up. Edges carry the information, so edges are where there is something to get
+        wrong.
+      </p>
+
+      <h3>1.5 Iterative denoising with Euler sampling</h3>
+      <p>
+        Instead of one big jump, take many small ones and ask the model again at every step. That
+        is forward Euler: <code>x_{t+h} = x_t + h * v(x_t, t)</code> with <code>h = 0.02</code>.
+        Recomputing the velocity each step is the entire difference from 1.3, because it lets the
+        path bend.
+      </p>
+      <p>
+        The last step is shortened to whatever distance is left instead of overshooting past 1, so
+        starting from <code>t = 0.93</code> takes three full steps and then one of 0.01. The running
+        time is snapped instead of accumulated, because adding 0.02 fifty times drifts off 1.0 by a
+        few floating point ulps and the notebook checks that the final time is exactly 1.
+      </p>
+<pre class="snippet"><code>while t &lt; 1.0 - 1e-9:
+    h = min(step_size, 1.0 - t)
+    x = x + h * velocity(x, t)
+    t = min(1.0, t + h)</code></pre>
+      <div id="fig-a15"></div>
+      <div id="checks-recon"></div>
+      <p>
+        The blur is six times worse than either model-based method, which is the expected result and
+        the least interesting one. The surprise is that <strong>the one-step estimate beats the
+        twenty five step one</strong>, 0.0031 against 0.0041. More compute, more model calls, and a
+        worse number.
+      </p>
+      <p>
+        I do not think the iterative result is worse, and this is mostly a fact about the
+        metric. Mean squared error rewards being close everywhere and punishes being confidently
+        wrong anywhere, so it prefers a smooth, slightly hedged answer over a sharper one that
+        commits to detail in the wrong places. The one-step image is the smoother of the two. The
+        Euler result has more contrast and more definition in the muzzle and the eyebrows, and that
+        extra detail does not line up pixel for pixel with the fabric that was there, so it
+        gets charged for it.
+      </p>
+      <p>
+        Both of them lose the plush texture, so neither is really recovering the original. This is
+        the same lesson as project 2, that an error number and an eye can disagree, and here the
+        number is the one that needs an argument made for it.
+      </p>
+
+      <h3>1.6 Generating images from noise</h3>
+      <p>
+        Same sampler, except it starts at <code>t = 0</code> from pure noise with nothing to recover,
+        so all fifty steps are generation. The prompt is the generic "a high quality photo", which
+        gives the model almost no steering.
+      </p>
+      <div id="fig-a16-panel"></div>
+      <div id="fig-a16"></div>
+      <p>
+        All five samples are photographs of people, framed as portraits, against plain studio
+        backgrounds, with nothing else in the picture. Asked for a high quality photo and given no
+        other instruction, this model's answer is a portrait.
+      </p>
+      <p>
+        The quality is another matter. Only two of the five hold together. Seed 180 produces hair
+        and a shoulder with no face at all, seed 181 is a torso with anatomy that does not work, and
+        seed 183 has features that look melted. So a generic prompt gives you both a narrow subject
+        and an unreliable result, and the next section fixes the second of those.
+      </p>
+
+      <h3>Numerical checks</h3>
+      <p>
+        The notebook asserts several things as it goes, and these are the ones that would have caught
+        a real mistake instead of passing no matter what the code did.
+      </p>
+      <div id="checks-a"></div>
+    </section>
+
+    <section id="a-guidance">
+      <h2>Part A &middot; 2.1 Classifier-free guidance</h2>
+      <p>
+        The samples in 1.6 are what the model produces when the prompt barely matters. Guidance
+        makes the prompt matter more, and it does it without a classifier anywhere. Predict the
+        velocity twice at the same point, once with the prompt and once with the empty string, then
+        walk further along whatever direction the prompt added.
+      </p>
+<pre class="snippet"><code>v_conditional   = predict_velocity(x, t, condition)
+v_unconditional = predict_velocity(x, t, null_condition)
+return v_conditional + w * (v_conditional - v_unconditional)</code></pre>
+      <p>
+        At <code>w = 0</code> this collapses back to the plain conditional prediction, which the
+        notebook checks. I return the conditional branch directly in that case instead of computing
+        <code>v_c + 0 * (v_c - v_u)</code>, which makes the equality exact to the bit and skips a
+        forward pass whose result gets multiplied by zero anyway.
+      </p>
+      <p>
+        One thing I did not expect is that Part A and Part B use different guidance formulas.
+        Part A is <code>v_c + w(v_c - v_u)</code> and Part B is <code>v_u + g(v_c - v_u)</code>.
+        Expand them and they are the same family, just parameterised differently, with
+        <code>g = 1 + w</code>. So Part A's <code>w = 7</code> is the same strength as Part B's
+        <code>g = 8</code>, and Part B's <code>g = 5</code> would be <code>w = 4</code> in Part A's
+        terms. Carrying a number from one half to the other gives a different strength, with no
+        warning that anything changed.
+      </p>
+      <div id="fig-a21-panel"></div>
+      <div id="fig-a21"></div>
+      <p>
+        Same five seeds, so these read as a before and after, not as a different batch. Every one of the three broken samples is fixed. Seed 180 goes from hair with no face
+        to a clean portrait, seed 181's distorted torso becomes a coherent head and shoulders, and
+        seed 183's melted features resolve. All five are now sharp, well lit and properly
+        proportioned.
+      </p>
+      <p>
+        The cost is visible in the same figure. Without guidance the five images were at least
+        varied, with different crops, framings and distances. With guidance they have converged on
+        one thing: a centred, front-facing, evenly lit headshot, the sort of photograph a company
+        would put on a staff page. Guidance pushed harder in the direction the prompt was already
+        pointing, and the direction "a high quality photo" points is a stock portrait. So it
+        strengthened the bias at the same time as it fixed the anatomy, and the trade on offer is
+        reliability for variety.
+      </p>
+    </section>
+
+    <section id="a-editing">
+      <h2>Part A &middot; 3.1 and 3.2 Image editing</h2>
+      <p>
+        Both of these sections run the identical procedure, and the only thing that changes is the
+        text embedding fed in. Noise a real image part of the way back toward noise, then re-denoise
+        it with guidance. How far back you go is the whole control.
+      </p>
+<pre class="snippet"><code>def edit(image, noise, t_start, condition, predict_velocity, w=7, step_size=0.02):
+    x_start = interpolate(image, noise, t_start)
+    final, _ = euler_sample(x_start, t_start, step_size,
+                            lambda x, t: cfg_velocity(x, t, condition, w,
+                                                      predict_velocity, null_condition))
+    return final</code></pre>
+      <p>
+        A large starting time keeps most of the original and the model only tidies it up. A small
+        starting time throws nearly all of it away, so the model is close to generating from scratch
+        and only vaguely remembers what was there. The seven times run from 0.02 to 0.50, so each
+        strip reads as a sweep from invented to barely touched.
+      </p>
+
+      <h3>3.1 Image-to-image editing</h3>
+      <p>
+        The prompt here is the generic "a high quality photo", so the model is not being told what
+        to make. It just pulls whatever is left toward being photographic.
+      </p>
+      <div id="fig-a31"></div>
+      <p>
+        My two images are the Freddy plush from section 1 and a Bonnie plush, both photographed on
+        white. Across all three strips the sweep behaves the same way, and there is a clear
+        threshold at around <code>t = 0.06</code>. Above it the subject survives and the model
+        rebuilds it. Below it the subject is gone and the model is making something up.
+      </p>
+      <p>
+        What it invents below the threshold follows a pattern. At <code>t = 0.02</code> and <code>0.04</code> the
+        Freddy strip gives a woman's profile and then a shirtless man, both on white. The Campanile
+        gives a blurred cream cylinder that looks more like a vase than a building. Bonnie gives a
+        purple smartphone and then a purple box. The subject is destroyed in every case, but the
+        dominant colour and the figure-on-plain-background layout survive, and the model fills that
+        layout with whatever its prior finds most likely. Twice out of three that
+        is a person, which lines up exactly with the bias section 1.6 showed.
+      </p>
+      <p>
+        Above the threshold the three strips differ in an interesting way. Freddy and Bonnie come
+        back fast, recognisable by <code>t = 0.10</code>, because a brown bear and a purple rabbit
+        are shapes the model knows well. The Campanile takes much longer. At <code>0.10</code> and
+        <code>0.14</code> it is a smooth featureless tower with a single box near the top, and the
+        arched belfry windows and the clock face only return at <code>0.25</code> and
+        <code>0.50</code>. Fine architectural detail is the last thing to come back, because it is
+        the highest frequency content in the picture and therefore the first thing the noise removed.
+      </p>
+
+      <h3>Editing hand-drawn and web images</h3>
+      <p>
+        The same seven times applied to one image from the web and two drawings of my own. This is
+        where the effect is easiest to see, because the input is not a photograph at all, so the
+        model has much further to travel.
+      </p>
+      <div id="fig-a31-creative"></div>
+      <p>
+        The web image is Hokusai's Great Wave. My two drawings are a cartoon wave in flat blue and
+        white, and a house with an orange body, a brown thatched roof and a navy door.
+      </p>
+      <p>
+        The Great Wave strip is the clearest demonstration on this page. At <code>t = 0.02</code> it
+        is a woman sitting at a laptop. At <code>0.04</code> it is a robot vacuum on a desk, and at
+        <code>0.06</code> a hand holding a small blue object. Three completely unrelated pieces of
+        modern stock photography, and the only thing they share with the original is being blue and
+        cream. Then at <code>t = 0.10</code> the wave comes back, and from there to
+        <code>0.50</code> it sharpens from a soft painterly version into something close to the
+        woodblock print.
+      </p>
+      <p>
+        My house drawing does the same thing, giving two portraits on white backgrounds at the
+        lowest times and then returning. What is nice about the middle of that strip is that from
+        <code>0.06</code> to <code>0.14</code> the model has clearly decided the drawing is a
+        photograph of a physical object, so it renders the flat orange rectangle as a 3D box with
+        shading and a cast shadow and turns the scribbled roof into real thatch. It is converting
+        the drawing into an object, which is a different job from improving it.
+      </p>
+      <p>
+        The wave drawing behaves differently again, and the reason is that it is the simplest input
+        of the three. At <code>0.02</code> and <code>0.04</code> it becomes a plain blue panel, at
+        <code>0.06</code> a blue dome, and it only resolves into a wave at <code>0.14</code>. A flat
+        shape with almost no internal detail does not give the model much to hold on to, so it
+        keeps the colour and the silhouette and loses everything else. Bolder drawings do work
+        better here, but only up to the point where bold starts meaning empty.
+      </p>
+
+      <h3>3.2 Text-guided editing</h3>
+      <p>
+        Same images, same seven times, but now each one gets a prompt describing what I want it to
+        become. The thing that decides whether this works is whether the prompt is shape-compatible
+        with the original, because at the larger starting times the silhouette and composition
+        survive. Ask for something with a different outline and the high-time frames look untouched
+        while the low-time frames look unrelated, and the strip stops reading as a progression.
+      </p>
+      <div id="fig-a32"></div>
+      <p>
+        My three prompts were "A photograph lighthouse at dusk" for the Campanile, "A realistic
+        animatronic bear" for Freddy and "A realistic animatronic bunny" for Bonnie.
+      </p>
+      <p>
+        The lighthouse is the best of the three and it is the one where the shapes agree. At
+        <code>t = 0.02</code> it is a complete invented lighthouse by the sea under a pink dusk sky,
+        with no Campanile left. By <code>0.06</code> the Berkeley trees are back at the bottom of
+        the frame while the top of the tower is still a lantern room with a railing, and that blend
+        holds through <code>0.10</code> and <code>0.14</code>, which is where the strip is most
+        convincing: it is unmistakably the Campanile, standing where the Campanile stands, wearing
+        a lighthouse's head. At <code>0.25</code> the arched windows start pushing the lighthouse
+        out, and by <code>0.50</code> the prompt has lost.
+      </p>
+      <p>
+        The two plush prompts work differently, because they are not asking for a different object
+        so much as a different material. Freddy is a plush toy of a character who is an animatronic
+        bear in the games, so the prompt is really asking the model to complete the fiction. It
+        does: from <code>0.10</code> onward the fabric hardens into moulded plastic with visible
+        seams, panel lines and screw holes, in the same pose and the same hat. Bonnie gets the same
+        treatment. At the lowest two times both fall apart, Freddy into a jointed wooden figure and
+        Bonnie into a phone.
+      </p>
+      <p>
+        The pattern across all three is the one the handout describes, with a caveat. Larger
+        starting times do preserve more of the original, but the useful range is narrower than the
+        seven times suggest. Below <code>0.06</code> nothing of the input survives and the prompt is
+        just generating from scratch, and at <code>0.50</code> the input wins and the prompt barely
+        registers. Everything useful happens between those two.
+      </p>
+    </section>
+
+    <section id="a-illusions">
+      <h2>Part A &middot; 3.3 and 3.4 Illusions</h2>
+      <p>
+        Both of these do the same trick in a different place: run two prompts at once and combine
+        their velocities at every step, so each step has to move somewhere both prompts are happy
+        with. Nothing about the sampler changes, only what gets returned as the velocity.
+      </p>
+
+      <h3>3.3 Visual anagrams</h3>
+      <p>
+        Score the canvas under the first prompt. Then turn it upside down, score it under the second
+        prompt, and turn that velocity back the right way up before averaging the two. Rotating the
+        velocity back is the part that is easy to miss, because it was computed in the flipped frame
+        and has to be returned to the upright one before it can be added to anything.
+      </p>
+<pre class="snippet"><code>v_a = cfg_velocity(x, t, condition_a, w, predict_velocity, null_condition)
+v_b = rotate180(cfg_velocity(rotate180(x), t, condition_b, w,
+                             predict_velocity, null_condition))
+return (v_a + v_b) / 2</code></pre>
+      <div id="fig-a33"></div>
+      <p>
+        The two panels above show each illusion upright and already turned over. Below are the same
+        two at full size, and these ones rotate when you hover them, which is a better way to read
+        an anagram than scrolling between two copies or tilting your head. The flip button latches
+        it if you want to sit and look at the second reading.
+      </p>
+      <div id="fig-a33-full"></div>
+      <p>
+        My two pairs are "an oil painting of a bearded sailor" with "an oil painting of a sailing
+        ship in a storm", and "a lithograph of a stag" with "a lithograph of a snowy forest at
+        dusk".
+      </p>
+      <p>
+        The stag is the better of the two and both of its readings stand on their own. Upright it is
+        a stag facing the viewer under a full rack of antlers, standing in snow with pink dusk light
+        behind it. Turned over, the antlers become a bare branching shrub low in the frame, the
+        stag's legs become the trunks of the nearest trees, and the dusk light stays where it was,
+        because a bright horizontal band reads as sky either way up. The antlers doing duty as
+        branches is what makes it work. They are the same kind of shape at the same scale, so
+        neither reading has to distort to accommodate the other.
+      </p>
+      <p>
+        The sailor pair works, but it is lopsided. The correspondence is clean enough: the dark cap
+        becomes the ship's hull, the gold lit beard becomes the sails, and the blue coat across the
+        bottom becomes the storm sky at the top. As a ship it is completely convincing. As a sailor
+        it is an impression of a face more than a face, with the features loosely placed and most of
+        the work done by one bright region that is a lit beard in one reading and sunlit canvas in
+        the other.
+      </p>
+      <p>
+        So the pattern across both pairs is that a scene survives the rotation better than a portrait
+        does. A scene can rearrange itself freely: any bright patch can be sky, any dark vertical can
+        be a trunk or a mast, and nothing has to land in a particular place. A face has fixed
+        relative positions for the eyes, nose and mouth, so it has to win an argument the scene never
+        needs to have. Both of my strong readings are scenes and the one weak reading is the face.
+      </p>
+
+      <h3>3.4 Hybrid images</h3>
+      <p>
+        This is project 2's hybrid images again, except the split happens on the velocity at every
+        step rather than on two finished photographs. The first prompt contributes only its low
+        frequencies and the second only what the low pass throws away, so the first subject is what
+        you see from across the room and the second is what you see up close.
+      </p>
+<pre class="snippet"><code>return lowpass(v_a) + v_b - lowpass(v_b)</code></pre>
+      <p>
+        The low pass is a Gaussian with sigma 16 and kernel size 265 at 512 by 512, far wider than
+        anything project 2 used. That width sets the viewing distance at which the two subjects are
+        meant to swap, and making that number agree with the size you view the result at turned out
+        to be most of this section.
+      </p>
+      <div id="fig-a34"></div>
+      <p>
+        My pairs were a human skull at a distance with a swarm of bees up close, and a bearded man's
+        face at a distance with cracked dry earth up close. At full size both images read as their
+        close prompt with no trace of the distant one. The first is a dense swarm of bees over a
+        dark mass, drawn down to individual wings and legs. The second is a man's face with a
+        network of cracks running across it.
+      </p>
+      <p>
+        The notebook shows the distant reading by shrinking to 64 by 64, and at 64 the first one is
+        still bees. That view is the wrong size to be judging this at. A box downsample by a factor
+        of <code>k</code> removes roughly what a Gaussian of sigma <code>k / 2</code> removes, so
+        512 down to 64 is only about sigma 4. The split gave the distant prompt everything below
+        sigma 16 and handed the close prompt everything above it, and sigma 16 works out at a factor
+        of about 32, which is a 16 pixel view. The entire band between sigma 4 and sigma 16 is
+        close-prompt content that a 64 pixel view still shows, so the reduced view is four times too
+        large to be the distance the blur was built for.
+      </p>
+      <p>
+        These strips are each hybrid at 64, 32, 24 and 16 pixels, reduced with the same LANCZOS
+        filter the notebook uses and then blown back up with nearest neighbour so nothing is
+        interpolated back in.
+      </p>
+      <div id="fig-a34-far"></div>
+
+      <h4>One pair worked and one did not</h4>
+      <p>
+        The skull is there. At 64 the bees still hold the image, at 32 a face shape begins to
+        assemble, and by 24 and 16 it is unambiguous: two dark sockets under a pale domed cranium,
+        with a dark centre where the nose and mouth belong. Up close it is bees and nothing but
+        bees, and at the distance the blur was designed for it is a skull.
+      </p>
+      <p>
+        The face and the cracked earth never separate at all. The face holds every scale from 512
+        down to 16, and the cracks never take the close reading at any size.
+      </p>
+      <p>
+        That is a different failure from a frequency clash, and the prompt is where it comes from.
+        Cracked dry earth is a surface treatment and not a subject, so the model had the option of
+        painting the cracks onto the face instead of building a second picture out of them, and it
+        took that option. The cracks follow the contours of the cheek and the brow. There is one
+        image here, drawn once, with a texture applied over the top. A swarm of bees cannot be
+        applied to anything, because each bee is a discrete object that has to occupy a position, so
+        the two prompts were forced to compete for the same canvas and the split had something real
+        to divide.
+      </p>
+      <p>
+        The rule I would use next time is that the close prompt has to be capable of being a whole
+        picture on its own. Anything a painter could add as a finish, so cracks, rust, scratches,
+        fur, will be added as a finish, and then the distant prompt owns the image at every scale.
+      </p>
+    </section>
+
+    <!-- ============================================================ PART B -->
+
+    <section id="b-unet">
+      <h2>Part B &middot; Training a single-step denoising UNet</h2>
+      <p>
+        Part B starts over with nothing pretrained. Before any flow matching, the first job is a
+        plain denoiser: hand it a noisy MNIST digit and ask for the clean one back.
+      </p>
+
+      <h3>1.1 The UNet</h3>
+      <p>
+        The architecture is built from six small pieces, then assembled so that every downsampling
+        step has a matching upsampling step and a skip connection carrying the earlier feature map
+        across. Shapes for hidden width <code>D</code>:
+      </p>
+<pre class="snippet"><code>x        (1, 28, 28)
+conv     (D, 28, 28)   kept for the outermost skip
+down1    (D, 14, 14)   kept
+down2   (2D,  7,  7)   kept
+flatten (2D,  1,  1)   the bottleneck
+unflat  (2D,  7,  7)   cat with down2 -> 4D
+up1      (D, 14, 14)   cat with down1 -> 2D
+up2      (D, 28, 28)   cat with conv  -> 2D
+out      (1, 28, 28)</code></pre>
+      <p>
+        <code>UpConv</code> uses kernel 4 with stride 2 and padding 1, because that is the
+        combination where the arithmetic comes out exact and 7 goes to 14 goes to 28 with no
+        off-by-one. The final layer is a bare <code>Conv2d</code> with no norm and no activation,
+        since putting a BatchNorm on the output of a regression head would squash the range the
+        network is trying to predict.
+      </p>
+
+      <h3>1.2 Training the denoiser</h3>
+      <p>
+        Noise is added as <code>z = x + sigma * eps</code> with the digit in [0, 1]. The model trains
+        at one noise level only, <code>sigma = 0.5</code>, with width 128, batch size 256, Adam at
+        1e-4, for five epochs. Fresh noise is drawn every time a batch is loaded, so epoch two never
+        sees the same noisy version of a digit that epoch one did.
+      </p>
+      <div id="fig-b12"></div>
+      <div id="fig-b121"></div>
+      <p>
+        Both epochs hand back a readable digit, so the four extra epochs buy edges. After one epoch
+        the strokes are slightly ragged and there is leftover speckle in the background, clearest on
+        the four, which keeps a stray bright pixel under it, and on the nine, which comes back a
+        little swollen. After five the background is flat black and a stroke holds its thickness
+        along its whole length.
+      </p>
+      <p>
+        The loss curve agrees. It drops from about 0.24 to roughly 0.01 inside the first two hundred
+        steps and then runs nearly flat for the remaining nine hundred. Almost all of the error goes
+        in the first epoch, and the rest of training is spent on the last thousandth, which is
+        precisely the part you can only see at the stroke edges.
+      </p>
+
+      <h3>1.2.2 Out-of-distribution testing</h3>
+      <p>
+        The model has only ever seen <code>sigma = 0.5</code>. Here it gets all seven levels,
+        including noise far heavier than anything it trained on, which is a test of whether it
+        learned to denoise or just learned one particular noise level.
+      </p>
+      <div id="fig-b122"></div>
+      <p>
+        It holds up further than I expected. Everything through <code>sigma = 0.6</code> comes back
+        clean, and the row it trained on at 0.5 is indistinguishable from the rows on either side of
+        it. The first real damage is at 0.8, and the thin digits go first: a one grows a loop and
+        reads as an eight, and a couple of the others pick up hooks on the ends of strokes that
+        should finish plain. By 1.0 most of the row is wrong.
+      </p>
+      <p>
+        How it fails is the part I did not expect. At the heaviest noise it commits to a sharp,
+        confident, incorrect digit instead of hedging toward a blur. There is still real signal left
+        at <code>sigma = 1.0</code>, so the model has something to lock onto, and it locks onto the
+        wrong thing. The next section removes the signal entirely and the behaviour flips.
+      </p>
+
+      <h3>1.2.3 Denoising pure noise</h3>
+      <p>
+        Same setup, except the input is pure Gaussian noise and the target is still a clean digit.
+        The input now carries no information at all about which digit is wanted, and every noise
+        sample is paired with an arbitrary one.
+      </p>
+      <p>
+        Under a mean squared error loss the best possible prediction when the input tells you nothing
+        is the mean of the targets. The model cannot beat that, because nothing distinguishes one
+        training pair from another, so it converges to roughly the average MNIST digit. That is why
+        all eight outputs are the same blurry grey blob with a bright centre instead of ten distinct
+        shapes.
+      </p>
+      <p>
+        The epoch comparison came out the opposite way round from the one in 1.2.1, and it took me a
+        second to see why it should. Five epochs give a flatter, greyer, more uniform blob than one
+        epoch does. Training longer makes this worse, because the target it is converging on is the
+        average, and more training means it gets there more completely. The loss curve stops moving
+        around 0.068 for the same reason: that is the floor set by the variance of the dataset, and
+        no amount of further training goes under it.
+      </p>
+      <p>
+        This is the failure flow matching fixes. Conditioning on <code>t</code> and predicting a
+        velocity gives the network an input that settles which answer is correct, so there is
+        nothing left for it to average over.
+      </p>
+      <div id="fig-b123"></div>
+    </section>
+
+    <section id="b-time">
+      <h2>Part B &middot; 2.1 to 2.3 Time-conditioned flow matching</h2>
+      <p>
+        Now the same UNet learns a velocity instead of an image, and it needs to know how far along
+        the path it is. Time comes in through small fully connected blocks that turn the scalar
+        <code>t</code> into a per-channel vector, which then scales a feature map. There are two
+        injection points, one on the bottleneck output and one after the first upsample.
+      </p>
+<pre class="snippet"><code>unflat = unflat * self.fc1_t(t)     # at the bottleneck, 2D channels
+up1    = up1    * self.fc2_t(t)     # after the first upsample, D channels</code></pre>
+      <p>
+        Training draws <code>t</code> uniformly on [0, 1] for each sample, builds
+        <code>x_t = (1 - t) * x_0 + t * x_1</code> with <code>x_0</code> Gaussian noise, and
+        regresses on the target <code>x_1 - x_0</code>. Width drops to 64, batch size to 64, and the
+        learning rate starts at 1e-2, which is a hundred times higher than Part 1 used.
+      </p>
+      <p>
+        The reasoning for the schedule is that the high rate only works if something brings it back
+        down. An exponential decay with <code>gamma = 0.1 ** (1 / epochs)</code>, stepped once per
+        epoch, covers a full decade over the ten epochs: the run logged 7.94e-3 after the first
+        epoch, 3.16e-3 after the fifth and 1.00e-3 after the tenth. The large early rate is supposed
+        to move the weights into the right region fast while the decay lets the last epochs settle
+        detail instead of bouncing around the minimum.
+      </p>
+      <p>
+        I tested that reasoning on the class-conditioned model further down and it did not survive
+        contact with the data, so treat the paragraph above as the argument I started with.
+      </p>
+      <div id="fig-b22"></div>
+      <div id="fig-b23"></div>
+      <p>
+        After one epoch none of the forty are digits. They are blobs carrying roughly the right
+        amount of ink at roughly the right stroke weight, sitting in the middle of the frame, which
+        is already a long way from noise. After five the strokes have the right character, with real
+        curves and junctions and clean terminations, and a handful resolve into something I could
+        name. Most are still ambiguous.
+      </p>
+      <p>
+        After ten I would call about half legible without being told what to look for. The third row
+        is the best of the four and has a clear nine, seven, four, zero and two in it. The rest are
+        digit-shaped without being any particular digit, usually because a stroke closes a loop that
+        should have stayed open or a stem runs into a curve it should have missed. The handout asks
+        for reasonably legible and this clears that bar.
+      </p>
+      <p>
+        It is well short of the class-conditioned grid two sections down, though that comparison is
+        not clean: that model also gets guidance at 5.0 and six times as many sampling steps, so the
+        class label is only one of three things that changed.
+      </p>
+    </section>
+
+    <section id="b-class">
+      <h2>Part B &middot; 2.4 to 2.6 Class conditioning</h2>
+      <p>
+        A time-conditioned model makes digits, but not a digit you asked for. Adding the class means
+        two more conditioning blocks at each injection point, four in total, and the modulation
+        changes shape: the class scales the feature map and the time shifts it.
+      </p>
+<pre class="snippet"><code>unflat = self.fc1_c(one_hot) * unflat + self.fc1_t(t)
+up1    = self.fc2_c(one_hot) * up1    + self.fc2_t(t)</code></pre>
+      <p>
+        During training the label is dropped on about a tenth of every batch by zeroing its one-hot
+        row. Without that the model would never learn an unconditional velocity, and guidance at
+        sampling time would have nothing to subtract. Masking this way also keeps the tensor shape
+        identical, so the conditional and unconditional cases go through the same code path.
+      </p>
+      <p>
+        Sampling uses guidance at <code>gamma = 5.0</code> over 300 Euler steps. Note this is Part
+        B's convention, <code>v_u + gamma(v_c - v_u)</code>, not Part A's.
+      </p>
+      <div id="fig-b25"></div>
+      <div id="fig-b26"></div>
+
+      <h3>The scheduler ablation</h3>
+      <p>
+        The last thing 2.6 asks for is the same model trained without the learning rate scheduler,
+        keeping quality comparable, and an account of what had to change to compensate.
+      </p>
+      <p>
+        I held the rate constant at 1e-3, which is where the schedule finishes. Holding it at 1e-2
+        for all ten epochs is the other obvious choice and it does not converge, because nothing
+        ever shrinks the step size. Picking the schedule's final rate gives the schedule the hardest
+        comparison I could set up, since 1e-3 is the rate the scheduled run spends its best epochs
+        at. Going in, I expected to pay for it in the early epochs, where the scheduled run is
+        taking steps ten times larger.
+      </p>
+      <div id="fig-b26-ablation"></div>
+      <p>
+        That cost never appeared. At ten epochs the two runs are the same: 0.0869 against 0.0875
+        averaged over the last two hundred steps, a gap of six ten-thousandths, and the two sample
+        grids are equally legible. If anything the constant-rate grid is marginally tidier, but a
+        single draw of four per class is not enough to call that.
+      </p>
+      <p>
+        What does survive is the shape of the curves rather than their height. The raw per-step
+        trace on the scheduled run tightens over the last few thousand steps as the rate decays,
+        while the constant-rate trace is about as wide at step nine thousand as it was at step three
+        thousand. The schedule is buying steadier individual updates, and on a problem this small
+        that does not turn into a better model. With a tighter epoch budget, or a harder dataset, I
+        would expect the gap to open up.
+      </p>
+      <p>
+        One caveat on the two loss plots above: their y-axis limits come from each run's own opening
+        steps, so the axes differ and the curves cannot be compared by eye. The table below is the
+        comparison.
+      </p>
+
+      <h3>Numerical checks</h3>
+      <div id="checks-b"></div>
+    </section>
+
+    <section id="learned">
+      <h2>What I learned</h2>
+      <p>
+        Part B's 1.2.3 is the clearest failure I have produced in this course and the thing I will
+        remember longest. Train a model to map noise to digits under a squared error loss, hand it
+        an input that says nothing about which digit is wanted, and it returns the average of the
+        dataset. No amount of training fixes it, and five epochs of it come out worse than one.
+        Everything after that section is an answer to it: conditioning on <code>t</code> and
+        predicting a velocity works because it gives the network an input that settles the answer,
+        so there is nothing left to average over.
+      </p>
+      <p>
+        The two halves use different guidance formulas and I nearly carried a number across without
+        noticing. Part A is <code>v_c + w(v_c - v_u)</code> and Part B is
+        <code>v_u + g(v_c - v_u)</code>, the same family with <code>g = 1 + w</code>. Both notebooks
+        call the parameter the guidance strength, so Part A's <code>w = 7</code> and Part B's
+        <code>g = 7</code> are different settings that look identical in a writeup.
+      </p>
+      <p>
+        Sections 3.3 and 3.4 are project 2's hybrid images with the split moved off the finished
+        pixels and onto the velocity. That is a small edit in the code and a large one in what it
+        can make. In project 2 I blended two photographs that already existed; here the two readings
+        get negotiated during sampling, so the model searches for a single image that satisfies both
+        prompts. That framing is also what explains the one hybrid that failed. The split can only
+        divide something the two prompts are both competing for, so if one of them describes a
+        finish instead of a subject the model applies it to the other and there is only ever one
+        picture.
+      </p>
+      <p>
+        The other half of that section is the one I would have got wrong without checking. A blur
+        and a viewing size are the same statement about frequency, and I had been comparing a sigma
+        16 split against a 64 pixel view, which is a factor of four apart. The skull was in the
+        image the whole time and I was looking at it from the wrong distance. Any time a method has
+        a scale parameter in it, the way I inspect the output needs to carry the same parameter.
+      </p>
+      <p>
+        Twice on this page a number and my eye disagreed. The one-step reconstruction beats the
+        twenty five step one on mean squared error while looking worse, and the scheduler ablation
+        came out level when I had an argument for why it should not. Both times the number was
+        correct about the thing it measures, and I was asking it a question it does not answer.
+      </p>
+    </section>
+
+  </main>
+
+  <footer class="site">
+    <p>alexsiek.github.io</p>
+  </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script src="./results.js"></script>
+<script src="./proj3.js"></script>
+</body>
+</html>
