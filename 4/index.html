@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CS180 Project 4: Image Warping, Mosaicing and Autostitching</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="./proj4.css">
+
+  <script>
+    /* Bootstrap components follow the same light/dark preference as the rest of the site. */
+    document.documentElement.setAttribute(
+      "data-bs-theme",
+      window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  </script>
+</head>
+<body>
+<div class="wrap wrap--wide">
+
+  <a class="backlink" href="../index.html">&larr; Back to portfolio</a>
+
+  <header class="site">
+    <p class="kicker">Programming Project #4, Parts A and B</p>
+    <h1>Image Warping, Mosaicing and Autostitching</h1>
+    <p class="subtitle">CS180: Intro to Computer Vision and Computational Photography &middot; Alex Siek</p>
+  </header>
+
+  <nav class="proj-nav">
+    <ul class="nav nav-pills justify-content-center">
+      <li class="nav-item"><a class="nav-link" href="#overview">Overview</a></li>
+      <li class="nav-item nav-part">Part A</li>
+      <li class="nav-item"><a class="nav-link" href="#a1">A.1 Shooting</a></li>
+      <li class="nav-item"><a class="nav-link" href="#a2">A.2 Homographies</a></li>
+      <li class="nav-item"><a class="nav-link" href="#a3">A.3 Warping</a></li>
+      <li class="nav-item"><a class="nav-link" href="#a4">A.4 Mosaics</a></li>
+      <li class="nav-item"><a class="nav-link" href="#learned">Learned (A)</a></li>
+      <li class="nav-item nav-part">Part B</li>
+      <li class="nav-item"><a class="nav-link" href="#b1">B.1 Corners</a></li>
+      <li class="nav-item"><a class="nav-link" href="#b2">B.2 Descriptors</a></li>
+      <li class="nav-item"><a class="nav-link" href="#b3">B.3 Matching</a></li>
+      <li class="nav-item"><a class="nav-link" href="#b4">B.4 RANSAC</a></li>
+      <li class="nav-item"><a class="nav-link" href="#learned-b">Learned (B)</a></li>
+    </ul>
+  </nav>
+
+  <main>
+
+    <section id="overview">
+      <h2>Overview</h2>
+      <p>
+        Two photographs taken from the same spot, with the camera turned between them, are related
+        by a single 3 by 3 matrix. The relationship is exact and it holds right across the frame. If
+        the centre of projection does not move, every point in one image maps to a point in the
+        other through one projective transform, and recovering that matrix is enough to lay both
+        pictures down in the same plane.
+      </p>
+      <p>
+        That is the whole of Part A. Shoot overlapping frames, pick corresponding points by hand,
+        solve for the matrix that relates them, warp one image into the other's frame, and blend the
+        overlap so the join does not show. Part B, further down this page, replaces the hand picked
+        points with corner detection and automatic matching, and changes nothing else, so everything
+        in Part A is the scaffolding the automatic version runs on.
+      </p>
+      <p>
+        The constraint the handout puts on this is that the warping and the homography solve have to
+        be written from scratch. No library that takes two point sets and hands back a warped image.
+        That is the part worth doing, so the sections below spend their time on the solve, the
+        inverse warp and the resampling. Part B is written from scratch on the same terms, with one
+        exception the assignment names: the Harris response itself comes from the provided
+        <code>harris.py</code>, which the handout says to use rather than reimplement.
+      </p>
+      <div id="run-table"></div>
+    </section>
+
+    <div class="tools">
+      <label>
+        <input class="form-check-input mt-0" type="checkbox" id="magnify-toggle" checked>
+        Magnifier
+      </label>
+      <label>
+        zoom
+        <input type="range" class="form-range" id="magnify-zoom"
+               min="2" max="12" step="0.5" value="4" style="width: 120px;">
+        <span id="magnify-zoom-label">4.0x</span>
+      </label>
+      <span>Hover any result with the magnifier on, or click it to open the lightbox.</span>
+    </div>
+
+    <section id="a1">
+      <h2>A.1 &middot; Shoot the pictures</h2>
+      <p>
+        The one rule that matters when shooting is that the camera rotates and does not travel. A
+        homography only describes the relationship between two views if they share a centre of
+        projection, so turning on the spot is fine and taking a step sideways is not. Anything with
+        depth in it will give the mistake away: near and far objects shift by different amounts, no
+        single matrix can satisfy both, and the overlap ends up with doubled edges that no amount of
+        blending will hide.
+      </p>
+
+      <h3>Set 1</h3>
+      <div id="fig-a1-set1"></div>
+
+      <h3>Set 2</h3>
+      <div id="fig-a1-set2"></div>
+
+      <h3>Set 3</h3>
+      <div id="fig-a1-set3"></div>
+
+      <p>
+        Three sets, all handheld, all shot indoors around the same building. The cafe entrance is a
+        pair: a merchandise case with a doorway at the right of the frame, then that same doorway at
+        the left of the next frame with a gated corridor behind it. The other two are triples with
+        the middle frame as the reference. One is a corridor junction, which has a lot of depth in
+        it. The other is the mailroom, which is close to a single flat wall.
+      </p>
+      <p>
+        Whether I managed to turn on the spot is something you can check after the fact. If the
+        camera only rotates, the homography between two frames has to factor as
+        <code>K R K_inverse</code> for some camera matrix and some rotation, so I swept the focal
+        length and measured how close <code>K_inverse H K</code> came to being a real rotation
+        matrix. Zero would mean a perfect rotation and no sideways movement at all.
+      </p>
+<pre class="snippet"><code>pair                   rotation   residual
+cafe, left onto centre    43 deg      0.011
+corridor, left            25 deg      0.015
+corridor, right           21 deg      0.014
+mailroom, left            28 deg      0.006
+mailroom, right           24 deg      0.047</code></pre>
+      <p>
+        Four of the five sit close to a pure rotation, so I held the centre of projection reasonably
+        well. The mailroom's right pair is the odd one at 0.047, around five times its neighbours.
+      </p>
+      <p>
+        That residual moves around with where the points go. I picked that pair three times,
+        spreading the correspondences wider each attempt, and the residual swung by nearly an order
+        of magnitude between them.
+      </p>
+      <p>
+        The misalignment itself barely moved. Measured as structural error across the overlap, all
+        three attempts landed within a sixth of each other, and the way that error climbs with how
+        much detail a region holds traced the same curve every time. So tripling the spread changed
+        the alignment hardly at all and changed nothing about its character. Whatever is wrong with
+        that join survives any choice of four points I made, which rules out my clicking and points
+        at the geometry instead. A.4 has what it turned out to be.
+      </p>
+      <p>
+        The 43 degrees on the cafe pair matters later. It is nearly twice the turn of any other pair,
+        and a flat canvas cannot absorb that without stretching. Mosaic 1 in A.4 is what it costs.
+      </p>
+
+      <h3>Depth</h3>
+      <p>
+        The corridor is the set with real depth in the overlap: a near wall on one side and a
+        doorway several metres further back. A homography describes the relationship between two
+        views of a scene with depth only if the camera stayed put, so that is the set where any
+        sideways drift should show.
+      </p>
+      <p>
+        A little of it does show. A.4 has the measurement and what it comes to, since the place to
+        judge it is on the finished mosaic.
+      </p>
+      <p>
+        The one that struggled was the mailroom, which is a single flat wall and should have been
+        the easy case. A.4 has what went wrong there.
+      </p>
+    </section>
+
+    <section id="a2">
+      <h2>A.2 &middot; Recover homographies</h2>
+      <p>
+        A homography maps homogeneous coordinates through a 3 by 3 matrix, and the result is
+        divided by its own third component to come back to image coordinates. Scaling the whole
+        matrix changes nothing, so there are eight free parameters and not nine. Fixing
+        <code>h33 = 1</code> is the usual way to pin the scale down, and it turns the problem into a
+        linear solve.
+      </p>
+      <p>
+        Writing out one correspondence, a point <code>(x, y)</code> in the first image landing on
+        <code>(x', y')</code> in the second:
+      </p>
+<pre class="snippet"><code>x' = (h11*x + h12*y + h13) / (h31*x + h32*y + 1)
+y' = (h21*x + h22*y + h23) / (h31*x + h32*y + 1)</code></pre>
+      <p>
+        Those are nonlinear in the unknowns only because of the division. Multiplying both sides by
+        the denominator clears it and leaves two equations that are linear in the eight unknowns:
+      </p>
+<pre class="snippet"><code>h11*x + h12*y + h13 - h31*x*x' - h32*y*x' = x'
+h21*x + h22*y + h23 - h31*x*y' - h32*y*y' = y'</code></pre>
+      <p>
+        So every correspondence contributes two rows. Stacking <code>n</code> of them gives a
+        <code>2n</code> by 8 system:
+      </p>
+<pre class="snippet"><code>A @ h = b        h = [h11 h12 h13 h21 h22 h23 h31 h32].T
+
+per point, the two rows of A and the two entries of b:
+
+  [ x  y  1  0  0  0  -x*x'  -y*x' ]        [ x' ]
+  [ 0  0  0  x  y  1  -x*y'  -y*y' ]        [ y' ]</code></pre>
+      <p>
+        Four points give exactly eight equations and a unique solution, which also means any error
+        in picking those four goes straight into the matrix with nothing to push back on it. Using
+        more than four makes the system overdetermined and there is generally no exact solution, so
+        it gets solved in the least squares sense instead. The extra points average the clicking
+        error out, and the residual becomes a usable signal: a correspondence I misplaced shows up
+        as one pair of rows with a much larger reprojection error than the rest.
+      </p>
+
+      <h3>The correspondences</h3>
+      <div id="fig-a2-corr"></div>
+      <p>
+        Every pair here uses four correspondences, which is the minimum and a real shortfall. Four
+        points determine the homography exactly, so the solve reproduces them perfectly and the
+        reprojection error comes out as 0.00 px for all five pairs. That number is arithmetic, not a
+        score. With more than four the fit has to compromise, the residuals stop being zero, and a
+        point I had misplaced would stand out as one large residual among small ones.
+      </p>
+      <p>
+        What the four points sit on turned out to matter more than how many of them there were. My
+        first attempt put all four on the corners of one small sign, covering under one per cent of
+        the frame. The cafe pair failed outright: warping its left frame into the right left a mean
+        intensity difference near 40 out of 255 across the overlap, and the frame ballooned to ten
+        times its own area.
+      </p>
+      <p>
+        Spreading the same four points to cover about a third of the frame cut that difference by
+        nearly half and the mosaic came together. Same count, same photographs, same code.
+      </p>
+      <p>
+        The reason is conditioning. I jittered every clicked point by one pixel and watched where the
+        warped frame corners moved to. Bunched, a one pixel error shifted a corner by more than a
+        thousand pixels. Spread wide, by under a hundred. Four points in a tight cluster pin the transform down near that
+        cluster and leave it almost unconstrained everywhere else, so the fit extrapolates on faith.
+      </p>
+      <p>
+        The points themselves went on corners of rigid things: door frames, notice boards, the edges
+        of the mailbox grids, the line where skirting meets floor. Nothing on a reflection, because a
+        specular highlight sits in a different place for every viewpoint and would pull the solve
+        toward a correspondence that is not one.
+      </p>
+      <p>
+        Below are the five recovered matrices. Each one has <code>h33 = 1</code> because the solve
+        fixes it, which is what makes the system linear in the remaining eight.
+      </p>
+
+      <h3>The recovered matrices</h3>
+      <div id="fig-a2-matrices"></div>
+
+      <h3>Numerical checks</h3>
+      <div id="checks-a2"></div>
+    </section>
+
+    <section id="a3">
+      <h2>A.3 &middot; Warp the images</h2>
+      <p>
+        The warp runs backwards. Stepping through the source image and pushing each pixel to where
+        the homography sends it leaves the output full of holes, because the mapping stretches some
+        regions and no integer source pixel lands in the gaps. Stepping through the output instead,
+        and asking where each destination pixel came from, gives every output pixel exactly one
+        answer. That needs <code>H</code> inverse, and it needs a value at a fractional source
+        coordinate, which is where the interpolation comes in.
+      </p>
+      <p>
+        The output canvas is sized before any of that happens. Warping the four corners of the
+        source through <code>H</code> and taking the extremes gives the bounding box of the result,
+        which is where the translation that keeps everything at positive coordinates comes from. The
+        handout's convention is that pixel <code>(0, 0)</code> is the centre of the first pixel
+        rather than its corner, and getting that wrong shifts everything by half a pixel, which is
+        invisible in a single warp and shows up as a soft doubled edge once two frames are stacked.
+      </p>
+<pre class="snippet"><code>corners = [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]
+warped  = H @ corners_homogeneous        # then divide through by row 3
+x0, y0  = floor(warped.min(axis=1))      # bounding box of the output
+x1, y1  = ceil(warped.max(axis=1))
+
+for each output pixel p in that box:
+    src = H_inv @ (p + [x0, y0])         # back to source coordinates
+    out[p] = sample(im, src)             # nearest neighbour, or bilinear</code></pre>
+      <p>
+        Pixels whose source coordinate falls outside the input get no value at all, so the warp
+        carries an alpha mask alongside the colour. That mask is what the blending step in A.4 uses
+        to tell a genuine black pixel from a region that was never covered.
+      </p>
+      <p>
+        The two interpolators differ only in <code>sample</code>. Nearest neighbour rounds the
+        source coordinate and reads one pixel. Bilinear takes the four pixels around it and mixes
+        them by how close each one is, which costs four reads and a handful of multiplies per
+        output pixel instead of one read.
+      </p>
+      <p>
+        Graphics teaches the same operation as three lerps, and that is how I wrote it. Interpolate
+        along the top edge between the two upper pixels, interpolate along the bottom edge between
+        the two lower ones, then interpolate between those two results. The blend factors are just
+        the fractional parts of the source coordinate. Writing it that way makes two things obvious
+        that the weighted-sum version hides: a sample landing exactly on a pixel centre has both
+        fractions at zero and collapses to a single read, and because the operation is separable the
+        order does not matter, so interpolating down the columns first and across afterwards gives
+        the same answer.
+      </p>
+
+      <h3>Rectification</h3>
+      <p>
+        Rectification is the single-image test of all of this. Photograph something known to be
+        rectangular from an angle, pick its four corners, and map them onto an actual rectangle. The
+        correspondences are invented rather than matched, which means the result is checkable by
+        eye: if the solve and the warp are right, the thing comes out square on, and if the matrix
+        is subtly wrong the rectangle comes out as a trapezium.
+      </p>
+      <div id="fig-a3-rect"></div>
+
+      <h3>Nearest neighbour against bilinear</h3>
+      <div id="fig-a3-interp"></div>
+      <div id="fig-a3-detail"></div>
+      <div id="checks-a3"></div>
+      <p>
+        Nearest neighbour took 211 ms and bilinear 456 ms on the same warp, so bilinear costs about
+        2.2 times as much. Both are a 1200 pixel frame going into an 809 by 1605 output.
+      </p>
+      <p>
+        On average the two results differ by 2.04 in intensity out of 255, which sounds like
+        nothing. The average is misleading. All of the disagreement is on edges and the flat regions
+        drag the mean down; the worst single pixel differs by 112.
+      </p>
+      <p>
+        The two crops above are the same 256 pixel window from each. The blind slats are a stack of
+        high contrast near-horizontal edges, which is the worst case for nearest neighbour, and it
+        shows: every slat edge has visible stair stepping where it crosses a pixel row. Bilinear is
+        smooth along the same edges and slightly softer everywhere else.
+      </p>
+      <p>
+        At this resolution bilinear is worth the extra 245 ms without needing an argument. The warps
+        finish in under half a second and there are only a handful of them. The sums would look
+        different on full size frames, where one warp is closer to half a minute, or on video where
+        it runs per frame.
+      </p>
+      <p>
+        The gap also grows with how hard the warp stretches. Where a region is magnified, many
+        output pixels fall between the same few source pixels: nearest neighbour gives them all one
+        value and produces visible blocks, while bilinear keeps a gradient across them. That is why
+        I used the blinds rectification for this comparison instead of one of the mosaic warps, since
+        it magnifies far more in one corner.
+      </p>
+    </section>
+
+    <section id="a4">
+      <h2>A.4 &middot; Blend into a mosaic</h2>
+      <p>
+        With a homography and a warp, the mosaic is mostly bookkeeping. Pick one frame to be the
+        reference and leave it alone, warp the others into its plane, work out a canvas big enough
+        for all of them, and composite. For three frames the middle one is the natural reference,
+        because warping the two outer frames inward distorts each of them less than chaining both
+        onto one end would.
+      </p>
+      <p>
+        Compositing is where the choice is. Overwriting one image with the other gives a visible
+        line wherever the two disagree, and they always disagree a little: exposure drifts between
+        frames, vignetting darkens the edges, and the homography is never exact, so the overlap is
+        misregistered by a fraction of a pixel. A weighted average across the overlap spreads that
+        disagreement out instead of concentrating it on one line. The usual weight is a distance
+        transform, high in the middle of each frame and falling to zero at its edge, so each pixel
+        is dominated by whichever image had it furthest from a border.
+      </p>
+      <p>
+        A weighted average has its own failure, which is that it blurs anything the two frames do
+        not agree on geometrically. A Laplacian pyramid blend fixes that by blending each frequency
+        band over a different width: wide for the low frequencies, where a slow ramp hides exposure
+        differences, and narrow for the high frequencies, where a wide ramp would smear detail.
+        That is the same multiresolution blending as project 2, applied to a seam instead of an
+        apple and an orange.
+      </p>
+
+      <h3>The source frames</h3>
+      <div id="fig-a4-sources"></div>
+
+      <h3>The mosaics</h3>
+      <div id="fig-a4-mosaics"></div>
+
+      <h3>What the blending buys</h3>
+      <div id="fig-a4-blend"></div>
+      <p>
+        All three use the two band blend. Each frame is split into a blurred version and the detail
+        that is left over. The blurred part cross fades slowly across the overlap, which is what
+        hides the exposure difference between frames. The detail is cut hard at the seam, with no
+        averaging anywhere.
+      </p>
+      <p>
+        That hard cut is the part that matters, and I had it backwards at first. My first version
+        faded every band across the whole overlap, the finest one included. Averaging two copies of
+        an edge that sit a few pixels apart draws both of them at half strength, which is exactly
+        what a ghost is. The corridor mosaic had a visibly doubled doorway until the detail band was cut
+        instead of faded. Nothing else changed, including the points.
+      </p>
+      <p>
+        The seam lands in the middle of the overlap on its own. Each pixel goes to whichever frame
+        holds it furthest from that frame's own border, and those two distances cross over halfway.
+      </p>
+
+      <h3>Three different things make a join visible</h3>
+      <p>
+        Blending only helps with one of them. An exposure step it hides, by fading the low
+        frequencies over a few hundred pixels. Misregistration it cannot fix, and the most it can do
+        is refuse to average it into a ghost. Parallax from the camera having moved it cannot touch
+        at all, because no single matrix was ever going to align the scene.
+      </p>
+      <p>
+        Those first two are worth separating before judging anything, and my first attempt at
+        measuring did not. Taking the mean absolute difference across an overlap mixes a brightness
+        difference together with a failure to line up, and the two want completely different fixes.
+        Running a high pass over both frames first removes the exposure part, since a brightness
+        difference is almost entirely low frequency, and what survives is the structural error.
+      </p>
+<pre class="snippet"><code>                    raw   exposure   structure
+mosaic 1  cafe     23.1       22.0         9.5
+mosaic 2  corridor  5.3        4.9         2.8
+          other join 8.9       7.6         4.9
+mosaic 3  mailroom 13.5        6.1        11.6
+          other join 16.3      4.7        15.4
+
+mean intensity difference across the overlap, out of 255</code></pre>
+      <p>
+        That changes how mosaic 1 looks. It has by far the largest raw number and almost all of it
+        turns out to be exposure, so the difference along its join is a brightness step, which is
+        exactly the thing the blur crossfade exists to hide. Mosaic 3 is the opposite: the smallest
+        exposure difference of any set and the largest structural error.
+      </p>
+      <p>
+        The structure column still will not rank the three against each other, which took me
+        embarrassingly long to notice. It is an intensity difference, so it depends on how much
+        detail the scene holds as much as on how well the frames line up. The corridor is mostly
+        blank painted wall, around a fifth the local detail of the mailroom, and one of its joins
+        has barely a handful of textured patches anywhere in the overlap. A scene with nothing in it
+        scores well for free.
+      </p>
+      <p>
+        The measure that does not care what is in the scene is how far a patch has to move to line
+        up. In those terms the mailroom's left join is the tightest of the five and the corridor's
+        left join is the loosest, which is close to the reverse of what the structure column
+        suggests. So the honest summary is that each of these numbers answers a different question,
+        and none of them is the ranking.
+      </p>
+
+      <h3>Mosaic 1, cafe entrance</h3>
+      <p>
+        The only real difference along this join is exposure, which is the one defect blending
+        handles well. One frame points further into a lit corridor than the other, so the camera metered
+        them differently, and that shows as a brightness change across the overlap rather than as
+        anything doubled or stepped. There is one join here against two in the others, which helps.
+      </p>
+
+      <h3>Mosaic 2, corridor junction</h3>
+      <p>
+        This one holds together well across both joins. Where it breaks down is around the far wall
+        and the water station, which clip: edges that should continue through the join step sideways
+        instead.
+      </p>
+      <p>
+        That is the parallax. The corridor is the one set with real depth in the overlap, a near
+        wall against a doorway several metres back, and the water station sits in the recess between
+        them. Chopping the overlap into blocks and finding the shift that best lines each one up
+        comes to a few pixels, and it varies from block to block instead of settling on one figure.
+        Misalignment that changes with position like that is depth. A
+        homography that was simply wrong would be wrong by the same amount everywhere.
+      </p>
+      <p>
+        A few pixels is small, which is why the set still reads cleanly despite having the most
+        depth in it. It only becomes visible where a hard edge crosses the join, and the water
+        station is the one place with both a hard edge and a depth change.
+      </p>
+
+      <h3>Mosaic 3, mailroom</h3>
+      <p>
+        This one struggled, and it is the most interesting failure here because the wall is flat.
+        Flatness was supposed to make it easy.
+      </p>
+      <p>
+        The error goes almost entirely into the fine detail. To find where it sits I measured how
+        much local detail the centre frame carries at each point of the overlap, by high passing it
+        and averaging the result over a small neighbourhood, then sorted the overlapping pixels by
+        that and split them into five groups of equal pixel count. These are groups of pixels
+        sorted by how textured the scene is there. They have nothing to do with the frequency bands
+        the blend uses. Grouping on the centre frame, not on the error, keeps the groups a
+        description of the scene instead of the mistake. The disagreement climbs roughly eightfold
+        from the flattest group to the busiest, across the same join.
+      </p>
+<pre class="snippet"><code>flattest fifth of the overlap     3.5
+                                  9.2
+                                 15.1
+                                 21.4
+busiest fifth                    27.8
+
+structural difference, out of 255</code></pre>
+      <p>
+        Picking the points out of different parts of the wall made the trade obvious. Choosing
+        correspondences on the small things, the box numbers and the label holders, lined those up
+        and pushed the mailbox frames out of register. Choosing them on the frames and the panelling
+        squared the frames up and left every label doubled. There was no choice of four points that
+        did both.
+      </p>
+      <p>
+        Two surfaces at slightly different depths explains it, and a mailbox bank is exactly that:
+        the doors sit recessed inside their wooden surrounds by a few centimetres. That is enough
+        for a small sideways drift between frames to need one alignment for the doors and a
+        different one for the frames around them. The block shifts back it up, scattering between
+        minus eight and plus eight pixels across the overlap instead of agreeing on one number.
+      </p>
+      <p>
+        So the mailroom is a plane at arm's length and two planes up close, and which one you get
+        depends on where you put the points. A flat wall is only flat at the scale you look at it.
+      </p>
+      <h3>The stretch on mosaic 1</h3>
+      <p>
+        Separately from any of that, mosaic 1 stretches hard on the left, and that is the 43 degrees
+        from A.1 arriving. On a flat canvas the outer frame has to grow without limit as the angle
+        opens, and 43 degrees is far enough for it to dominate the picture. The standard fix is to
+        project onto a cylinder instead of a plane, which turns the camera's rotation into a slide
+        along the surface so the frames no longer have to stretch to meet. That is not something
+        this part does. The stretch is a property of the canvas, and it says nothing about how well
+        the two frames line up, which is a separate question.
+      </p>
+    </section>
+
+    <section id="learned">
+      <h2>What Part A taught me</h2>
+      <p>
+        The shared centre of projection is a constraint on where you stand, not a detail of the
+        algebra, and you can measure afterwards whether you honoured it. Factoring each homography
+        back into a camera matrix and a rotation gave residuals under 0.015 on four of my five pairs.
+        That says more about how I shot the set than any reprojection error I could quote, and it
+        caught the one pair where I probably drifted.
+      </p>
+      <p>
+        Where the points go beats how many there are, at least at the margin I was working in.
+        Spreading four points from one per cent of the frame to most of it cut how far a frame
+        corner travels per pixel of clicking error by more than ten times, and turned a mosaic that
+        failed into one that works. Count alone does not rescue a tight cluster: twenty points
+        bunched on one sign are worse conditioned than four points spread wide, by around a factor
+        of twenty five. I would still rather have twelve, because four of anything gives a
+        reprojection error of zero and no way to catch my own mistakes.
+      </p>
+      <p>
+        Inverse warping is forced, not preferred. Pushing source pixels forward scatters them to
+        fractional positions and leaves holes wherever the transform stretches. Walking the output
+        and asking where each pixel came from gives every one of them exactly one answer, which is
+        why the code needs the inverse matrix and an interpolator and could not be written the
+        other way round.
+      </p>
+      <p>
+        Blending and averaging are different operations, and project 2 did not teach me that because
+        its two images were already aligned. Here they are not. Fade the fine detail across an
+        overlap and a misalignment becomes a ghost; cut it and the same misalignment becomes a seam
+        you can put somewhere unobtrusive. Which band gets faded and which gets cut is the whole
+        decision.
+      </p>
+      <p>
+        Measure the right thing or the measurement will mislead you, and I got this wrong twice on
+        the same page. First I judged these mosaics by the mean difference across their overlaps and
+        called the cafe pair my worst registered, when nearly all of that number was an exposure
+        step, the one defect the blending already handles. Then I split the exposure out and trusted
+        what was left, which rewards a scene for being empty: the corridor scored best largely
+        because it is blank wall. Both numbers were correct about what they measure and neither was
+        measuring what I was asking.
+      </p>
+      <p>
+        Flat is a question about scale. The mailroom is one wall, so a homography should fit it
+        exactly no matter where I stood, and that was the reason I expected it to be the easy set.
+        Up close it is two surfaces: mailbox doors recessed a few centimetres inside their wooden
+        surrounds. That is plenty for one alignment to suit the doors and a different one to suit
+        the frames, and no four points can satisfy both at once.
+      </p>
+    </section>
+
+    <section id="partb">
+      <h2>Part B &middot; Autostitching</h2>
+      <p>
+        Everything above rests on four points per pair that I typed in by hand. Part B removes
+        that step and leaves the rest alone. The solver, the inverse warp, the canvas sizing and
+        the two band blend are the same functions running on the same photographs, so the mosaics
+        at the end of this page sit directly against the ones in A.4 and the only thing that
+        differs between them is where the correspondences came from.
+      </p>
+      <p>
+        The method is the one in Brown, Szeliski and Winder, <em>Multi-Image Matching using
+        Multi-Scale Oriented Patches</em>, with the simplifications the handout allows: one scale,
+        axis aligned patches, no wavelet indexing and no sub pixel refinement. It runs as a
+        funnel, and watching the counts fall is the shortest description of what each stage is
+        for.
+      </p>
+<pre class="snippet"><code>Harris, every local maximum           about 20,000   per frame
+  trimmed by strength                        3,000   per frame
+  adaptive non maximal suppression             500   per frame
+  the ratio test                          33 to 99   matches, per join
+  RANSAC                                  19 to 75   inliers, per join</code></pre>
+      <p>
+        Every stage throws away far more than it keeps and each one throws away a different kind
+        of thing. Suppression discards corners that are real but crowded. The ratio test discards
+        corners that are real and well spread but have no counterpart in the other frame. RANSAC
+        discards pairs that look alike and are in the wrong place. Only the last of those uses
+        geometry at all, which is why it comes last.
+      </p>
+      <div id="run-table-b"></div>
+      <p>
+        B.5, the bells and whistles, is optional for CS180 and I did not attempt it.
+      </p>
+    </section>
+
+    <section id="b1">
+      <h2>B.1 &middot; Detect the corners</h2>
+      <p>
+        The Harris response measures how much a patch of the image changes under a small shift,
+        in every direction at once. A flat patch changes under no shift, an edge changes under a
+        shift across it and not one along it, and a corner changes under both. The handout
+        supplies <code>harris.py</code> and says to use it rather than reimplement the detector,
+        so the response and its local maxima are the one part of Part B I did not write.
+      </p>
+      <p>
+        What it comes with is a coordinate convention trap. <code>harris.py</code> returns its
+        corners as (row, column) and every function in Part A takes (x, y). The two agree on a
+        square image and disagree silently everywhere else, which is the kind of bug that shows
+        up three stages later as nothing matching and no clue why. I convert once, on the way out
+        of the detector, and the test for it puts a single corner at x = 90, y = 60 so that a
+        swap cannot pass by symmetry.
+      </p>
+      <p>
+        Around twenty thousand corners come back per frame, which at this working resolution is
+        one for every forty pixels of image area. I keep the strongest three thousand before going
+        further, because the next step compares every candidate against every stronger candidate
+        and that cost grows with the square of the count.
+      </p>
+
+      <h3>Adaptive non maximal suppression</h3>
+      <p>
+        Keeping the five hundred strongest corners is the obvious way down to a workable number
+        and it is the wrong one. Corner strength is a measure of local contrast, so the strongest
+        corners pile up wherever the scene has the most contrast, which in my cafe frame is one
+        lit merchandise case covering about a fifth of the picture. A.2 already showed what that
+        costs. Four points clustered on one per cent of the frame moved a warped corner by over a
+        thousand pixels per pixel of clicking error, and the same four spread wide moved it by
+        under a hundred. A homography wants its evidence spread out.
+      </p>
+      <p>
+        Section 3 of the paper gets the spread without abandoning strength. Give every corner a
+        suppression radius, defined as the distance to the nearest corner that is meaningfully
+        stronger than it is:
+      </p>
+<pre class="snippet"><code>r_i = min ||x_i - x_j||     over every j with  f(x_i) &lt; c_robust * f(x_j)
+
+c_robust = 0.9, so a neighbour has to be about 1.11 times as strong to count</code></pre>
+      <p>
+        Then keep the five hundred largest radii. A corner survives if nothing stronger sits near
+        it, which a genuinely strong corner achieves by being strong and a modest corner achieves
+        by being the best thing in its own neighbourhood. The global maximum has no stronger
+        neighbour anywhere, so its radius is infinite and it is always kept.
+      </p>
+      <p>
+        The implementation is a sort and a prefix. With the corners in descending order of
+        strength, the points that can suppress corner <code>i</code> are exactly those with
+        <code>f(x_j) &gt; f(x_i) / 0.9</code>, and because the list is sorted those form a prefix
+        of it. One <code>searchsorted</code> call finds where each prefix ends, so corner
+        <code>i</code> is measured against that prefix instead of against all three thousand.
+      </p>
+      <div id="fig-b1-corners"></div>
+      <p>
+        Every Harris corner on the left of each figure, the ANMS selection on the right, at the
+        same scale. The table below gives the mean distance from a corner to its nearest
+        neighbour under each, which is the simplest single number for whether a set of points is
+        spread or clumped.
+      </p>
+      <div id="checks-b1"></div>
+      <p>
+        Keeping the strongest five hundred puts them about six pixels apart. Suppression roughly
+        doubles or triples that, to around fifteen to seventeen. The suppression radius is also
+        a floor rather than an average: the smallest radius kept on the cafe frame is 17.7 pixels,
+        so every corner in that selection is at least that far from anything stronger than it.
+      </p>
+    </section>
+
+    <section id="b2">
+      <h2>B.2 &middot; Describe them</h2>
+      <p>
+        A corner's position is useless on its own. Matching a corner in one frame against a
+        corner in the other needs a description of what the image looks like around it, short
+        enough to compare a quarter of a million times per join and stable enough to survive
+        everything that changes between two photographs.
+      </p>
+      <p>
+        Section 4 of the paper takes a 40 by 40 window around the corner, blurs it, samples every
+        fifth pixel to give an 8 by 8 patch, and normalises that patch to zero mean and unit
+        deviation. Sixty four numbers. Three things are happening and each buys a different kind
+        of tolerance.
+      </p>
+      <p>
+        Sampling coarsely over a wide window buys tolerance to the detector missing the corner. A
+        two pixel slip moves an 8 by 8 patch by a quarter of its own width, which changes it into
+        a different patch, and moves a 40 by 40 window by a twentieth, which barely changes it at
+        all. The test measures exactly this. Under a deliberate two pixel slip the descriptor
+        moves by 30.5 in squared distance where a raw 8 by 8 crop of the same image moves by
+        110.3.
+      </p>
+      <p>
+        Blurring first is what makes the coarse sampling legitimate. Taking every fifth pixel can
+        only represent detail coarser than about ten pixels across. Finer detail does not
+        disappear, it aliases into a false pattern, and which false pattern you get depends on
+        where the sample grid happened to land. That is the position sensitivity the wide window
+        was supposed to remove, arriving again through the back door. The sigma of 2.0 is the
+        anti aliasing width skimage applies for a downscale of five, which is the same operation.
+      </p>
+      <p>
+        Normalising buys tolerance to exposure. If the second frame is brighter and flatter the
+        patch becomes <code>a*d + b</code>, its mean becomes <code>a*mean + b</code> and its
+        deviation becomes <code>a*deviation</code>, so subtracting the mean and dividing by the
+        deviation cancels both constants exactly. That matters on these photographs in
+        particular. A.4 found that almost the whole disagreement along the cafe join is a
+        brightness step between the frames, and without this the descriptors would be comparing
+        exposure as much as structure.
+      </p>
+      <div id="fig-b2-desc"></div>
+      <p>
+        The patches read as structure rather than noise, which is the sign that the blur and the
+        sampling rate are in balance. Bars, steps and corners at various angles are legible in
+        them, and the mid grey is the zero that the normalisation put there.
+      </p>
+      <div id="checks-b2"></div>
+
+      <h3>An epsilon that broke the thing it was guarding</h3>
+      <p>
+        The normalisation divides by a standard deviation, which is zero on a perfectly flat
+        patch, so it needs a guard. I wrote the usual one, dividing by <code>std + 1e-8</code>,
+        and a test caught it straight away. Bias and gain were supposed to cancel to floating
+        point and they cancelled only to about 1e-6.
+      </p>
+      <p>
+        The error grew as the image got dimmer: 2.3e-6 at a gain of 0.5, 2.1e-5 at 0.1, 2.3e-4 at
+        0.01. That scaling is the entire diagnosis. An added constant is absolute and the
+        deviation it is added to is not, so a patch and a dimmer copy of that patch get perturbed
+        by different relative amounts and the gain stops cancelling. The guard was destroying the
+        invariance it was sitting inside.
+      </p>
+      <p>
+        A floor rather than an addition fixes it. <code>max(std, 1e-12)</code> leaves every real
+        patch untouched and engages only on a patch with no contrast at all, where there is
+        nothing left to preserve. Bias and gain now cancel to around 1e-13.
+      </p>
+    </section>
+
+    <section id="b3">
+      <h2>B.3 &middot; Match them</h2>
+      <p>
+        Five hundred descriptors on each side make a quarter of a million possible pairings per
+        join, and the correct ones number in the tens. Nearest neighbour gets most of the way
+        there, with one problem: it always returns something. A corner that is not in the
+        overlapping region at all still has a nearest neighbour, and that match is wrong by
+        construction.
+      </p>
+      <p>
+        The obvious filter is to drop matches whose distance is above some threshold, and it does
+        not work. How close a wrong match gets depends on the feature. A corner on a detailed,
+        unusual object has no near twin anywhere and its wrong matches are all far away. A corner
+        on a plain painted wall finds something nearly identical in any frame at all. One
+        threshold cannot serve both.
+      </p>
+      <p>
+        Lowe's ratio test asks the better question. Rather than asking whether the best match is
+        good, it asks whether the best match is much better than the second best:
+      </p>
+<pre class="snippet"><code>ratio = squared distance to the nearest / squared distance to the second nearest
+keep the match when ratio &lt; 0.64</code></pre>
+      <p>
+        The second nearest neighbour estimates how close a wrong match gets for this particular
+        feature, so dividing by it calibrates the bar per feature instead of globally. A corner
+        with no partner in the other frame has two unrelated neighbours at similar distances and
+        a ratio near one. The same test catches repeated structure, where the best and the second
+        best are both excellent and choosing between them is a coin toss, which describes the
+        mailroom's wall of identical mailboxes exactly.
+      </p>
+      <p>
+        The threshold comes from figure 6b of the paper, which plots this ratio for correct and
+        incorrect matches and is drawn on squared errors. Lowe's familiar 0.8 is the same
+        threshold quoted on distances, and 0.8 squared is 0.64.
+      </p>
+      <p>
+        I also require the match to be mutual, meaning each descriptor has to be the other's
+        nearest neighbour. The handout does not ask for it, and it costs nothing because the full
+        distance matrix already exists. It removes the case of several features all latching onto
+        one bland descriptor.
+      </p>
+      <div id="checks-b3"></div>
+      <div id="fig-b3-matches"></div>
+      <p>
+        Green is what RANSAC went on to accept and red is what it rejected, which makes these
+        figures a picture of what the ratio test cannot do. Every red line joins a pair of corners
+        that genuinely look alike. The test filters on appearance and nothing in it knows where
+        anything is, so a pair that looks right and sits in the wrong place passes. Separating
+        those out takes geometry.
+      </p>
+    </section>
+
+    <section id="b4">
+      <h2>B.4 &middot; RANSAC, and the automatic mosaics</h2>
+      <p>
+        Between 23 and 42 per cent of the matches that survive the ratio test are wrong, and
+        handing those to the least squares solver from A.2 does not work at all. Least squares
+        minimises a sum of squared errors, so its answer is dominated by the largest terms. A
+        match that is three hundred pixels wrong contributes ninety thousand to that sum where a
+        correct match contributes one, so a single bad match can move the answer arbitrarily far.
+        On planted test data the difference is a fit that lands 0.29 pixels from the truth
+        against one that lands 785 pixels from it.
+      </p>
+      <p>
+        RANSAC turns the problem around. Rather than fitting to everything and hoping the errors
+        cancel, fit to the smallest number of points that determine an answer at all, then let
+        the rest of the data vote on whether that answer was any good.
+      </p>
+<pre class="snippet"><code>1. draw 4 matches at random
+2. solve for H exactly, which is A.2's solver on a square 8 by 8 system
+3. count the matches whose own mapping agrees with H to within 3 px
+4. keep the largest such set, the consensus
+5. refit H by least squares on that consensus alone</code></pre>
+      <p>
+        Four is the minimal sample because a homography has eight degrees of freedom and each
+        correspondence supplies two equations. Minimal is what you want, for a reason that is
+        easy to miss: a draw is clean with probability <code>w</code> to the power of the sample
+        size, so every extra point the model needs makes a clean draw exponentially rarer.
+      </p>
+      <p>
+        Step 5 is the one that is easy to skip and should not be. Four points determine the
+        homography exactly, which means they reproduce their own measurement noise exactly too,
+        and they do it worst far from where they sit. Refitting on the whole consensus averages
+        that noise out. On the planted data it is the difference between 307 pixels of error and
+        0.29.
+      </p>
+      <p>
+        It is also the first time Part A's overdetermined path does any work. Every clicked join
+        used exactly four points, so A.2's reprojection error of 0.00 px was arithmetic rather
+        than a measurement. Here the refit runs on between nineteen and seventy five inliers, and
+        the residual it reports is a real number: 0.77 to 1.19 pixels mean across the five joins.
+      </p>
+
+      <h3>How many draws are enough</h3>
+      <p>
+        If a fraction <code>w</code> of the matches are inliers then a draw of four is clean with
+        probability <code>w</code> to the fourth, so the number of draws that gives at least one
+        clean sample with probability <code>p</code> is
+      </p>
+<pre class="snippet"><code>N = log(1 - p) / log(1 - w^4)        p = 0.99</code></pre>
+      <p>
+        <code>w</code> is not known in advance, so I estimate it from the best consensus so far
+        and recompute the budget whenever that improves. It starts at the 2000 cap and collapses
+        as soon as the loop finds anything decent. The runs took between fifteen and forty draws,
+        which follows from inlier fractions between 58 and 77 per cent: at those rates somewhere
+        between one draw in three and one in nine is clean.
+      </p>
+      <div id="checks-b4"></div>
+      <p>
+        The worst residuals on the two mailroom joins, 3.08 and 3.10 pixels, sit just over the
+        three pixel tolerance. That is not an inconsistency. A match is admitted on its distance
+        under one homography and then reported on its distance under the refitted one, and the
+        refit shifts slightly to accommodate everybody it admitted.
+      </p>
+      <p>
+        The refit also runs more than once. A clean sample of four is not necessarily a good one:
+        four correct matches that happen to sit close together pin the homography down near
+        themselves and extrapolate badly, so they can reject matches that are perfectly correct.
+        A test with twenty planted inliers caught this, finding only seventeen of them. Rescoring
+        with the refitted homography and refitting again while the consensus keeps growing found
+        all twenty, and on the real photographs it added inliers to four of the five joins: 27 to
+        29, 68 to 75, 45 to 53 and 34 to 36, with the corridor's left join already settled at 19.
+        Three passes was the most any join needed, and the counts are in the table above.
+      </p>
+
+      <h3>The recovered matrices</h3>
+      <div id="fig-b4-matrices"></div>
+
+      <h3>The mosaics</h3>
+      <p>
+        Each automatic mosaic sits below its hand clicked counterpart, built by the same code
+        from the same photographs with the same two band blend.
+      </p>
+      <div id="fig-b4-mosaics"></div>
+
+      <h3>Which one is better</h3>
+      <p>
+        By eye the pairs are hard to separate, so here is the measurement A.4 used: mean
+        intensity difference between the two frames across the region they both cover, before and
+        after a high pass that takes the exposure step out. The structure column is the one that
+        reports alignment.
+      </p>
+<pre class="snippet"><code>                            raw            structure
+join                   clicked    auto   clicked   auto
+cafe, left onto centre   22.90   21.59      9.46   7.84
+corridor, left            5.24    4.85      2.79   2.42
+corridor, right           8.65    8.31      4.67   4.28
+mailroom, left           13.42   13.53     11.61  11.70
+mailroom, right          15.90   12.15     15.20  11.99
+
+mean intensity difference across the overlap, out of 255</code></pre>
+      <p>
+        Almost nothing separates them. Both corridor joins and the mailroom's left join move by
+        under half an intensity level out of 255, which is no change at all. The cafe join
+        improves by 1.6, which sounds like something until you put it beside the 22.0 exposure
+        step sitting on the same join: the gain is a fourteenth of the difference the blend was
+        already dealing with there. Four of the five joins are inside two levels either way.
+      </p>
+      <p>
+        The mailroom's right join is the one place the automatic version does something
+        measurable, taking the structural error from 15.20 to 11.99. That is the only move in
+        the table larger than two levels. Its left join goes the other way by 0.09, which is a
+        tie.
+      </p>
+      <p>
+        That is not the write up I expected. A.2 calls four points per pair a real shortfall, so
+        I thought replacing them with tens of RANSAC inliers would show up as a visible gain
+        everywhere, and it did not. The explanation is in what the clicking was: four points
+        taken slowly, on door frames and notice boards and nothing reflective. Accurate points
+        leave little error for the averaging to remove. Where the automatic version pulls ahead
+        is the mailroom, and the mailroom is the set whose problem was never the points.
+      </p>
+
+      <h3>Two matrices that disagree and align the same</h3>
+      <p>
+        The first comparison I ran was between the matrices themselves, and it said something
+        completely different. Taking a grid of points across the source frame and measuring how
+        far apart the two homographies send them, the cafe join's two matrices disagree by 92
+        pixels on average and 873 at worst. Those are not small numbers, and the overlap
+        measurement above has the same two matrices registering that join to within two
+        intensity levels of each other.
+      </p>
+      <p>
+        Splitting the disagreement by where the point lands resolves it.
+      </p>
+<pre class="snippet"><code>join                      mean   in the overlap   outside   overlap
+cafe, left onto centre   91.97             1.80    148.52       39%
+corridor, left            4.46             1.14      9.27       59%
+corridor, right           1.39             1.19      1.80       66%
+mailroom, left            3.51             2.28      4.98       54%
+mailroom, right          15.29             6.44     29.10       61%
+
+how far apart the two matrices send the same source point, in pixels,
+over a grid across the whole source frame</code></pre>
+      <p>
+        Inside the overlap the two agree to under two and a half pixels on four joins of five.
+        All the rest is extrapolation into the part of the frame that has no counterpart in the
+        other photograph, where neither method had any evidence at all and the matrix is only
+        continuing the shape the points it did have gave it. A homography is pinned down where
+        the correspondences are and free everywhere else.
+      </p>
+      <p>
+        That is also why the canvases come out different sizes. The cafe mosaic is 5011 by 2897
+        pixels when clicked and 4246 by 2368 automatically, nearly a third smaller in area, because
+        the canvas is sized from where the warped corners land and the corners are precisely the
+        part being extrapolated.
+      </p>
+      <p>
+        So comparing two homographies entry by entry, or by how far apart they send arbitrary
+        points, mostly measures how they extrapolate. The question worth asking is how well each
+        registers the pixels that are in both frames.
+      </p>
+
+      <h3>The mailroom is still the mailroom</h3>
+      <p>
+        Automating the correspondences did not rescue the set that failed in A.4, and it was
+        never going to. Both mailroom joins stay the worst of the five under either method, at
+        11.70 and 11.99 structural against 2.42 for the best join on the page. A.4 traced that to
+        two surfaces at different depths, mailbox doors recessed a few centimetres inside their
+        wooden surrounds, and no single homography fits two planes at once.
+      </p>
+      <p>
+        RANSAC cannot help, because what it is good at is not what is wrong here. It finds the
+        largest set of matches consistent with one homography. Where the scene offers two
+        mutually inconsistent sets, it keeps the larger and discards the other as outliers, which
+        is a correct answer to the question RANSAC asks and still the wrong model for the scene.
+        Better correspondences did help the right join, taking it from 15.20 to 11.99, and left
+        the left join where it already was at 11.70 against 11.61. Neither comes near the 2.42
+        the corridor manages, and nothing in Part B was going to close that gap, because the gap
+        is the wall.
+      </p>
+    </section>
+
+    <section id="learned-b">
+      <h2>What Part B taught me</h2>
+      <p>
+        Automating the correspondences changed the result far less than I expected it to. I had
+        written A.2's admission that four points per pair is a shortfall assuming Part B would
+        show me what that shortfall cost, and on four of the five joins it showed me nothing:
+        the two homographies register their overlap within two intensity levels of each other,
+        out of 255. Four points chosen slowly on rigid corners are accurate points, and accurate
+        points leave little clicking error for tens of inliers to average out. The honest
+        summary is that RANSAC matched my clicking rather than beat it, which is still the
+        result worth having, because it matched it without me clicking anything.
+      </p>
+      <p>
+        The one exception says where the limit actually sits. The only join that moved was the
+        mailroom's right one, 15.20 down to 11.99, and after moving it is still the worst join
+        on this page, and still five times the corridor's 2.42. Three levels of improvement on
+        a join that far out is the method being beside the point rather than the method
+        working. Whatever holds these mosaics back, it is not how I picked the points.
+      </p>
+      <p>
+        Spread is the same lesson twice. A.2 found four points bunched on one sign conditioning
+        the solve catastrophically worse than four spread across the frame. ANMS is that finding
+        turned into an algorithm, and the paper arrives at it from the same direction: keeping
+        the strongest corners gets you a crowd, and a crowd constrains the transform where it
+        already is and nowhere else.
+      </p>
+      <p>
+        Ask whether the best match is unusually good, not whether it is good. The ratio test is
+        one division and it replaces a threshold that cannot work with one that can, because
+        dividing by the second nearest neighbour measures the match against how easy matching is
+        for that particular feature. It is the cheapest idea in the paper and it does the most
+        work.
+      </p>
+      <p>
+        Two matrices can disagree by a hundred pixels and align the same photographs identically,
+        because the disagreement lives where neither of them had any evidence. I nearly wrote the
+        automatic pipeline off on the strength of that first number. This is the third time on
+        this page that the measurement I reached for first was answering a different question
+        from the one I was asking, and the pattern in all three is the same: measure the thing
+        you actually care about, which here was the pixels in the overlap.
+      </p>
+      <p>
+        A clean minimal sample is not the same as a good one. Four correct matches sitting close
+        together give a homography that is right where they are and wrong elsewhere, so it
+        rejects matches that are perfectly fine. Rescoring against the refit and growing the
+        consensus costs a couple of extra solves and recovered the three inliers my test knew
+        were missing.
+      </p>
+      <p>
+        A guard clause can break the property it is guarding. Dividing by <code>std + 1e-8</code>
+        looks like harmless defensive code and it quietly destroyed the gain invariance that the
+        normalisation exists to provide, because an absolute epsilon means one thing to a bright
+        patch and something else to a dim one. The mosaics came out fine, so looking at them
+        would never have found it. A test asserting the invariance exactly found it on the first
+        run, and exactness was the whole point of that assertion.
+      </p>
+    </section>
+
+  </main>
+
+  <footer class="site">
+    <p>alexsiek.github.io</p>
+  </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script src="./results.js"></script>
+<script src="./proj4.js"></script>
+</body>
+</html>

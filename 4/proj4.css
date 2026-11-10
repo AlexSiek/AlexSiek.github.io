@@ -1,0 +1,310 @@
+/* Project 4 page styles. Loaded after bootstrap and after the site stylesheet,
+   so it wins on anything the three of them disagree about.
+
+   Carried forward from the project 3 sheet, minus the rules that were inherited
+   from earlier projects and never used: the plate animations from project 1 and
+   the anagram flip from project 3. The before/after wiper is back, because A.3
+   asks for an interpolation comparison and A.4 for a seam comparison, and both
+   of those read better wiped than placed side by side. */
+
+/* The gallery needs more room than the 900px reading column used elsewhere. */
+.wrap--wide { max-width: 1200px; }
+
+/* ---------- bootstrap reconciliation ---------- */
+
+/* Bootstrap's reboot sets its own type and colours. Pull the components that
+   actually get used back onto the site palette. */
+.card,
+.table,
+.nav-link { font-family: inherit; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.card-body { padding: 12px 14px; }
+
+.table {
+  --bs-table-bg: transparent;
+  --bs-table-color: var(--text);
+  --bs-table-border-color: var(--line);
+  font-size: 0.9rem;
+}
+
+.table thead th {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* ---------- sticky section nav ---------- */
+
+.proj-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  margin: 0 0 40px;
+  padding: 8px 0;
+}
+
+.proj-nav .nav-link {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-radius: 999px;
+}
+
+.proj-nav .nav-link:hover { color: var(--text); }
+
+.proj-nav .nav-link.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* The nav carries both halves of the project, so each half gets a label.
+   Eleven identical pills in a row read as one undifferentiated strip. */
+.proj-nav .nav-part {
+  align-self: center;
+  margin-left: 6px;
+  padding: 4px 4px 4px 14px;
+  border-left: 1px solid var(--line);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Part B's figures are matplotlib panels with their own white background and
+   their own titles, so they want a little more air around them than a photo. */
+#fig-b1-corners .figure-wide,
+#fig-b3-matches .figure-wide { margin: 1.4rem 0 2rem; }
+
+section { scroll-margin-top: 72px; }
+
+/* ---------- result cards ---------- */
+
+.shot { position: relative; display: block; line-height: 0; cursor: zoom-in; }
+
+.shot img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 0;
+  border-radius: 0;
+}
+
+.shot--pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 4 / 3;
+  background: var(--bg);
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  text-align: center;
+  padding: 12px;
+  cursor: default;
+}
+
+.shot-name {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--text);
+  margin: 0 0 6px;
+  word-break: break-word;
+}
+
+.shot-note { margin: 8px 0 0; font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
+
+/* ---------- magnifier lens ---------- */
+
+/* Worth more on this project than the last one: the difference between nearest
+   neighbour and bilinear is a pixel wide, so it is invisible at page scale. */
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin: 0 0 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.tools label { display: flex; align-items: center; gap: 8px; margin: 0; }
+
+.magnifier {
+  position: fixed;
+  z-index: 60;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+  background-repeat: no-repeat;
+  pointer-events: none;
+  display: none;
+  image-rendering: pixelated;
+}
+
+body.magnify-on .shot,
+body.magnify-on .compare { cursor: crosshair; }
+
+/* ---------- before / after wiper ---------- */
+
+.compare {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  user-select: none;
+  touch-action: pan-y;
+  line-height: 0;
+  margin: 1rem 0 0.5rem;
+}
+
+.compare img { width: 100%; display: block; }
+
+.compare__after {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  overflow: hidden;
+  clip-path: inset(0 0 0 50%);
+}
+
+.compare__after img { position: absolute; inset: 0; height: 100%; object-fit: cover; }
+
+.compare__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  cursor: ew-resize;
+}
+
+.compare__handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.compare__tag {
+  position: absolute;
+  top: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  line-height: 1.6;
+}
+
+.compare__tag--before { left: 10px; }
+.compare__tag--after { right: 10px; }
+
+/* ---------- placeholders while the photos are outstanding ---------- */
+
+.todo {
+  border-left: 3px solid #d98324;
+  background: rgba(217, 131, 36, 0.09);
+  border-radius: 0 8px 8px 0;
+  padding: 0.7rem 1rem;
+  margin: 1rem 0 1.4rem;
+  font-size: 0.93rem;
+}
+.todo strong { color: #d98324; }
+
+.todo-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #d98324;
+  border: 1px solid rgba(217, 131, 36, 0.55);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+.nav-link .todo-badge { margin-left: 0.3rem; }
+
+/* ---------- wide single figures ---------- */
+
+.figure-wide { margin: 1.2rem 0 1.6rem; }
+.figure-wide img {
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  background: #fff;
+}
+.figure-caption {
+  font-size: 0.86rem;
+  color: var(--muted);
+  margin-top: 0.45rem;
+}
+
+/* ---------- numeric tables ---------- */
+
+.checks td.value { font-variant-numeric: tabular-nums; }
+.checks td.ok { color: #2e9e5b; font-weight: 600; }
+
+/* Homography matrices and the least squares setup are read as blocks of
+   numbers, so they get the monospace treatment the code snippets use. */
+.matrix {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin: 0.8rem 0 1.2rem;
+}
+
+/* ---------- print ---------- */
+
+@media print {
+  .proj-nav,
+  .tools,
+  .magnifier,
+  .backlink { display: none !important; }
+
+  .compare__after { clip-path: none !important; position: static; }
+  .compare__handle,
+  .compare__tag { display: none; }
+
+  section { page-break-inside: avoid; }
+  a[href]::after { content: ""; }
+}

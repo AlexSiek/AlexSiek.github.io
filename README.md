@@ -12,12 +12,18 @@ AlexSiek.github.io/
 ├─ 0/                # Project 0: Becoming Friends with Your Camera
 │  ├─ index.html
 │  └─ media/         # photos + GIF for project 0
-└─ 1/                # Project 1: Colorizing the Prokudin-Gorskii collection
-   ├─ index.html     # skeleton, no results hardcoded
-   ├─ results.js     # THE ONLY FILE TO EDIT when results are ready
-   ├─ proj1.js       # renders galleries/tables, lightbox + magnifier
-   ├─ proj1.css
-   └─ media/         # colorized outputs
+├─ 1/                # Project 1: Colorizing the Prokudin-Gorskii collection
+│  ├─ index.html     # skeleton, no results hardcoded
+│  ├─ results.js     # THE ONLY FILE TO EDIT when results are ready
+│  ├─ proj1.js       # renders galleries/tables, lightbox + magnifier
+│  ├─ proj1.css
+│  └─ media/         # colorized outputs
+└─ 4/                # Project 4: Warping, mosaicing and autostitching, parts A and B
+   ├─ index.html     # the prose, both parts, one page
+   ├─ results.js     # the data manifest: every figure, caption and number
+   ├─ proj4.js       # galleries, wipers, matrix blocks, check tables
+   ├─ proj4.css
+   └─ media/         # photographs, mosaics, and the Part B figures (b_ prefix)
 ```
 
 Each new project gets its own numbered directory (`1/`, `2/`, …) with an `index.html`
@@ -71,3 +77,33 @@ rows for any that are missing.
 - [ ] URL submitted to the Google Form
 - [ ] URL submitted to Gradescope, without the image files attached
 - [ ] Due Tuesday, September 15th, 2026, 11:59PM
+
+## Project 4 workflow
+
+The page renders itself from `4/results.js`, the same split as project 1: the
+prose lives in `index.html`, the layout in `proj4.js`, and every figure,
+caption and number in `results.js`. Nothing on the page is hardcoded in two
+places, so a figure and its caption cannot drift apart.
+
+Part A and Part B are one page, which is what the part B handout asks for.
+Part B's media carry a `b_` prefix so the automatic figures never overwrite
+their hand clicked counterparts.
+
+To republish after a run of the pipeline in `HW4/`:
+
+1. `python main.py` then `python main_b.py`, which fill `out/` and `out_b/`.
+2. Copy the figures into `4/media/`, capped at 2400 px on the long side.
+3. Update the affected entries in `4/results.js`, including the numbers in the
+   captions and notes.
+4. Check that nothing drifted: every `RESULTS` key the renderer asks for should
+   exist, and every file a caption names should be in `media/`.
+
+### Project 4 submission checklist
+
+- [ ] Part A: shooting, recovered homographies, rectifications, three mosaics
+- [ ] Part B: Harris corners with and without ANMS, descriptors, matched
+      features, 4-point RANSAC, three automatic mosaics
+- [ ] Manual and automatic results shown against each other
+- [ ] Both parts on the one public page, since part B's submission includes part A
+- [ ] URL submitted to the class gallery form
+- [ ] URL submitted to Gradescope
